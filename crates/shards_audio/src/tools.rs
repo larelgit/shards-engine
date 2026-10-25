@@ -57,7 +57,8 @@ fn audio(In(_): In<Call<AudioArgs>>, world: &World) -> ToolResult {
         let at = v.distance.map(|d| format!(" {d:.1}m")).unwrap_or_default();
         let length = if v.looped { "loop".to_owned() } else { format!("{:.2}s", v.length) };
         let walls = if v.occlusion.by.is_empty() { String::new() } else { format!(" (occluded: {})", v.occlusion.describe()) };
-        out.push_str(&format!("  #{} {} {}{from}{at} gain {:.2} prio {} ({length}){walls}\n", v.id, v.sound, v.bus.name(), v.gain, v.priority));
+        let stopping = if v.stopping.is_some() { " (stopping)" } else { "" };
+        out.push_str(&format!("  #{} {} {}{from}{at} gain {:.2} prio {} ({length}){walls}{stopping}\n", v.id, v.sound, v.bus.name(), v.gain, v.priority));
     }
     if voices.len() > VOICES_SHOWN {
         out.push_str(&format!("  and {} quieter\n", voices.len() - VOICES_SHOWN));

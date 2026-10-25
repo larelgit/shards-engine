@@ -91,6 +91,25 @@ pub struct Voice {
     /// What stands between the ears and the source: clear unless the mixer has `occlusion` and the voice
     /// is spatial.
     pub occlusion: Occluded,
+    /// Its fade to silence once [`stop`] cut it short; `None` while it plays as it started.
+    pub stopping: Option<Fading>,
+}
+
+/// A voice fading to silence ([`stop`]): heard at the share of its gain that is left, and let go once it is
+/// silent.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Fading {
+    /// When it is silent, on the voice's clock.
+    pub until: f64,
+    /// Seconds the fade takes.
+    pub seconds: f64,
+}
+
+impl Fading {
+    /// The share of the voice's gain heard at `now`: 1 when the fade starts, 0 once it is over.
+    pub fn share(&self, now: f64) -> f32 {
+        ((self.until - now) / self.seconds).clamp(0.0, 1.0) as f32
+    }
 }
 
 /// A sound that was not heard, and why.
@@ -258,6 +277,7 @@ pub(crate) fn start(
         looped: def.looped,
         emitter,
         occlusion: Occluded::CLEAR,
+        stopping: None,
     };
     let bus = bus_volume(world, def.bus);
     let listener = world.resource::<Mixer>().listener;
@@ -412,14 +432,19 @@ pub(crate) fn real_clock(mut mixer: ResMut<Mixer>, time: Res<Time<Real>>) {
     mixer.real_seconds = time.elapsed_secs_f64();
 }
 
-/// Voices that played out are over (a looped one never plays out: its emitter lets it go); the others
-/// follow their sources and are heard again from where the ear is now, through the buses' volumes now
-/// and what stands in the way. Emitters first take voices in earshot and let go of the ones out of it
+/// Voices that played out are over (a looped one never plays out: its emitter lets it go), and so are
+/// the stopped ones whose fade is over; the others follow their sources and are heard again from where
+/// the ear is now, through the buses' volumes now and what stands in the way, a stopped one at what is
+/// left of its fade. Emitters first take voices in earshot and let go of the ones out of it
 /// ([`emitter::sync`]), so calling this again with nothing changed starts nothing.
 pub fn refresh(world: &mut World) {
     refresh_listener(world);
     let (sim, real) = world.resource::<Mixer>().clocks();
-    world.resource_mut::<Mixer>().voices.retain(|v| v.looped || (if v.bus == Bus::Ui { real } else { sim }) - v.started < v.length);
+    let now = |bus: Bus| if bus == Bus::Ui { real } else { sim };
+    world.resource_mut::<Mixer>().voices.retain(|v| {
+        let silent = v.stopping.is_some_and(|f| now(v.bus) >= f.until);
+        !silent && (v.looped || now(v.bus) - v.started < v.length)
+    });
     emitter::sync(world);
     let buses: BTreeMap<Bus, f32> = Bus::ALL.iter().map(|b| (*b, bus_volume(world, *b))).collect();
     // The voices are taken out while they are heard, so the world can be read for what they follow and
@@ -434,11 +459,44 @@ pub fn refresh(world: &mut World) {
         }
         hear(voice, listener, buses[&voice.bus]);
         occlude(world, voice, listener);
+        if let Some(fading) = voice.stopping {
+            voice.gain *= fading.share(now(voice.bus));
+        }
     }
     world.resource_mut::<Mixer>().voices = voices;
     if let Some(mut lines) = world.get_resource_mut::<Subtitles>() {
         subtitles::expire(&mut lines, sim, real);
     }
+}
+
+/// Cuts voice `voice` short (the id [`play`] gave it): a line interrupted, a radio call cut off. It fades to
+/// silence over `fade` seconds on its clock and is let go; `0` stops it at once, and a tenth of a second
+/// spares the ears a click (playback follows a voice's gain within about 0.05 s). Its line goes at once,
+/// since a line is what is heard. Stopping it again only ever shortens the fade. An emitter's voice is
+/// not stopped so, since its emitter would take one again: switch the emitter off
+/// ([`emitter_stop`](crate::emitter_stop)).
+pub fn stop(world: &mut World, voice: u64, fade: f32) -> Result<(), String> {
+    let fade = if fade.is_finite() { f64::from(fade.max(0.0)) } else { 0.0 };
+    let mut mixer = world.resource_mut::<Mixer>();
+    let Some(i) = mixer.voices.iter().position(|v| v.id == voice) else {
+        return Err(format!("no voice #{voice} plays: it played out, a stronger sound took it, or it was stopped"));
+    };
+    if mixer.voices[i].emitter.is_some() {
+        let sound = mixer.voices[i].sound.clone();
+        return Err(format!("voice #{voice} ({sound}) is a sound emitter's: switch the emitter off (`emitter_stop`) instead"));
+    }
+    if fade == 0.0 {
+        mixer.voices.remove(i);
+    } else {
+        let now = mixer.now(mixer.voices[i].bus);
+        let fading = Fading { until: now + fade, seconds: fade };
+        let it = &mut mixer.voices[i];
+        if it.stopping.is_none_or(|f| fading.until < f.until) {
+            it.stopping = Some(fading);
+        }
+    }
+    subtitles::cut(world, voice);
+    Ok(())
 }
 
 /// Stops every voice (a new region, a loaded save: what played belongs to the world that went).
@@ -471,6 +529,7 @@ mod tests {
             looped: false,
             emitter: None,
             occlusion: Occluded::CLEAR,
+            stopping: None,
         }
     }
 

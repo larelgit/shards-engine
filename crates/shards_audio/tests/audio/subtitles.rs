@@ -1,9 +1,10 @@
 //! Subtitles (U4): a played voice's line through the source `subtitles`, for its length and a
-//! moment after; the same line once; a taken voice's line gone; the setting; the language; the check.
+//! moment after; the same line once; a taken voice's line gone; a voice cut short (`stop`), faded out
+//! and its line gone at once; the setting; the language; the check.
 
 use serde_json::json;
 use shards::ai_core::JournalKind;
-use shards::audio::{play, SoundAt};
+use shards::audio::{play, stop, Played, SoundAt};
 use shards::content::{check_dir, ContentKinds};
 use shards::prelude::*;
 use shards::ui::{read_source, UiValue};
@@ -86,6 +87,34 @@ fn a_voice_taken_by_a_stronger_sound_takes_its_line_once_no_voice_says_it() {
     play(app.world_mut(), "boom", SoundAt::Everywhere).unwrap();
     assert_eq!(playing(&app), ["gate #1", "click #4", "boom #5", "boom #6"]);
     assert_eq!(shows(&app, "subtitles"), "Warden: The gate holds.", "no voice says it now");
+}
+
+#[test]
+fn a_voice_cut_short_fades_out_and_its_line_goes_at_once() {
+    let assets = folder("subtitles_stopped");
+    let mut app = english(&assets);
+    let Ok(Played::Started { id: gate, .. }) = play(app.world_mut(), "gate", SoundAt::Everywhere) else { panic!("the gate's line is not heard") };
+    wait(&mut app, 0.5);
+    play(app.world_mut(), "bark", SoundAt::Everywhere).unwrap();
+    let full = voices(&app)[0].gain;
+    assert!(full > 0.0);
+
+    // Half a second into its 2 s, the warden is cut short: his line goes, the bark's stays, and his voice fades.
+    stop(app.world_mut(), gate, 0.2).unwrap();
+    assert_eq!(shows(&app, "subtitles"), "Halt!");
+    assert!(ok(&mut app, "audio", json!({})).contains(&format!("#{gate} gate voice")), "the voice is still there, fading");
+    assert!(ok(&mut app, "audio", json!({})).contains("(stopping)"));
+    wait(&mut app, 0.1);
+    let fading = voices(&app).into_iter().find(|v| v.id == gate).expect("still fading").gain;
+    assert!(fading > 0.2 * full && fading < 0.8 * full, "halfway through the fade: {fading} of {full}");
+    wait(&mut app, 0.15);
+    assert_eq!(playing(&app), ["bark #2"], "silent and let go, long before its 2 s");
+
+    // A voice that is gone is no voice to stop, and 0 stops one at once.
+    assert_eq!(stop(app.world_mut(), gate, 0.2), Err(format!("no voice #{gate} plays: it played out, a stronger sound took it, or it was stopped")));
+    stop(app.world_mut(), 2, 0.0).unwrap();
+    assert!(playing(&app).is_empty());
+    assert_eq!(shows(&app, "subtitles"), "");
 }
 
 #[test]

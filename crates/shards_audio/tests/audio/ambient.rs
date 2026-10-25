@@ -5,7 +5,7 @@
 
 use serde_json::json;
 use shards::ai_core::{JournalKind, replay};
-use shards::audio::{emitter_play, emitter_stop, play, refresh, Bus, Mixer, Played, PlaySound, SoundAt, SoundEmitter, SoundTransmission};
+use shards::audio::{emitter_play, emitter_stop, play, refresh, stop, Bus, Mixer, Played, PlaySound, SoundAt, SoundEmitter, SoundTransmission};
 use shards::content::{check_dir, ContentKinds};
 use shards::motion::{Collider, CollisionLayers, Shape};
 use shards::prelude::*;
@@ -120,6 +120,9 @@ fn an_emitter_starts_and_stops_by_its_flag_the_api_and_the_tools_and_goes_with_i
     let stopped = app.world_mut().spawn((Name::new("Quiet"), SoundEmitter::new("drip").stopped(), Transform::from_xyz(0.0, 0.0, -3.0))).id();
     step(&mut app, 1);
     assert_eq!(playing(&app), ["hum #1"], "a stopped emitter holds no voice");
+    // Its voice is not cut short as a one-shot's is: the emitter would take one again.
+    let refusal = "voice #1 (hum) is a sound emitter's: switch the emitter off (`emitter_stop`) instead";
+    assert_eq!(stop(app.world_mut(), 1, 0.1), Err(refusal.to_owned()));
 
     emitter_stop(app.world_mut(), vent).unwrap();
     step(&mut app, 1);
