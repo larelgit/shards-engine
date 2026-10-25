@@ -107,7 +107,12 @@ fn a_voice_cut_short_fades_out_and_its_line_goes_at_once() {
     wait(&mut app, 0.1);
     let fading = voices(&app).into_iter().find(|v| v.id == gate).expect("still fading").gain;
     assert!(fading > 0.2 * full && fading < 0.8 * full, "halfway through the fade: {fading} of {full}");
-    wait(&mut app, 0.15);
+    // Stopped again, sooner: the fade goes on from where it is, never louder.
+    stop(app.world_mut(), gate, 0.05).unwrap();
+    wait(&mut app, 0.02);
+    let sooner = voices(&app).into_iter().find(|v| v.id == gate).expect("still fading").gain;
+    assert!(sooner < fading, "the shorter fade goes on from {fading}, at {sooner}");
+    wait(&mut app, 0.1);
     assert_eq!(playing(&app), ["bark #2"], "silent and let go, long before its 2 s");
 
     // A voice that is gone is no voice to stop, and 0 stops one at once.

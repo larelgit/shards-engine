@@ -101,12 +101,12 @@ pub struct Voice {
 pub struct Fading {
     /// When it is silent, on the voice's clock.
     pub until: f64,
-    /// Seconds the fade takes.
+    /// Seconds it would take from the full gain: the fade's length, or more when it goes on from a fade before it.
     pub seconds: f64,
 }
 
 impl Fading {
-    /// The share of the voice's gain heard at `now`: 1 when the fade starts, 0 once it is over.
+    /// The share of the voice's gain heard at `now`: 1 when a fade from the full gain starts, 0 once it is over.
     pub fn share(&self, now: f64) -> f32 {
         ((self.until - now) / self.seconds).clamp(0.0, 1.0) as f32
     }
@@ -489,8 +489,10 @@ pub fn stop(world: &mut World, voice: u64, fade: f32) -> Result<(), String> {
         mixer.voices.remove(i);
     } else {
         let now = mixer.now(mixer.voices[i].bus);
-        let fading = Fading { until: now + fade, seconds: fade };
         let it = &mut mixer.voices[i];
+        // A fade under way goes on from the share it has reached, so a shorter one never makes the voice louder.
+        let left = it.stopping.map_or(1.0, |f| f64::from(f.share(now)));
+        let fading = Fading { until: now + fade, seconds: fade / left };
         if it.stopping.is_none_or(|f| fading.until < f.until) {
             it.stopping = Some(fading);
         }
