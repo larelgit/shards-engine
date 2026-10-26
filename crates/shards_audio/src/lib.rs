@@ -20,7 +20,9 @@
 //!   the weakest (lowest priority, then quietest, then oldest) when it is stronger, else it is not
 //!   heard; a sound with `max_instances` takes its own oldest voice. A spatial sound is heard from
 //!   where it happens, fading from `near` to `far` from the listener (the body this machine plays,
-//!   facing with the camera) and panned; past `far` it is not started at all.
+//!   facing with the camera) and panned; past `far` it is not started at all. A game cuts a voice short
+//!   with [`stop`] (the id [`play`] gave it): it fades to silence over the seconds it asks and its line goes
+//!   at once (an interrupted line, a radio call cut off).
 //! - **Placed sounds** ([`SoundEmitter`], `looped: true` in a [`SoundDef`]): a looped sound plays only from
 //!   an emitter, a component a level node, a prefab or code puts at a `Transform`. The mixer holds one
 //!   voice for it while the listener is within `far` (under the normal priority rules: a one-shot of a
@@ -77,8 +79,8 @@ use shards_ui::{Layer, ScreenDef, UiAppExt, UiChanged, UiFocusMoved, UiPressed, 
 pub use def::{AudioDef, Bus, Falloff, LayerDef, MusicDef, OcclusionDef, SoundDef, StemDef, EVENTS};
 pub use emitter::{check_sound, emitter_play, emitter_stop, SoundEmitter};
 pub use mixer::{
-    bus_volume, listener, play, play_scaled, refresh, voice_limit, AudioListener, Dropped, Listener, Mixer, PlaySound, Played,
-    SoundAt, Voice,
+    bus_volume, listener, play, play_scaled, refresh, stop, voice_limit, AudioListener, Dropped, Fading, Listener, Mixer,
+    PlaySound, Played, SoundAt, Voice,
 };
 pub use music::{force_layer, set_track, Music, Stem};
 pub use occlusion::{Blocker, Occluded, SoundTransmission};
