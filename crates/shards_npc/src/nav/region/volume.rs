@@ -105,37 +105,67 @@ impl VoxelBake {
     }
 }
 
-/// Chunk bakes of every game in the process, newest last: the twins of heavy mode and the worlds
-/// a snapshot is loaded into have the same field, and bake nothing again.
-static SHARED: Mutex<Vec<(ChunkKey, Arc<NavTile>)>> = Mutex::new(Vec::new());
+/// Chunk bakes of every game in the process, newest last, up to a number: the twins of heavy mode
+/// and the worlds a snapshot is loaded into have the same ground, and bake nothing again.
+pub(super) struct Shared {
+    kept: Mutex<Vec<(ChunkKey, Arc<NavTile>)>>,
+    size: usize,
+}
+
+impl Shared {
+    pub(super) const fn new(size: usize) -> Self {
+        Self { kept: Mutex::new(Vec::new()), size }
+    }
+
+    fn all(&self) -> std::sync::MutexGuard<'_, Vec<(ChunkKey, Arc<NavTile>)>> {
+        self.kept.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    pub(super) fn get(&self, key: &ChunkKey) -> Option<Arc<NavTile>> {
+        let mut all = self.all();
+        let at = all.iter().position(|(k, _)| k == key)?;
+        let entry = all.remove(at);
+        let tile = entry.1.clone();
+        all.push(entry);
+        Some(tile)
+    }
+
+    pub(super) fn put(&self, key: ChunkKey, tile: Arc<NavTile>) {
+        let mut all = self.all();
+        all.retain(|(k, _)| *k != key);
+        all.push((key, tile));
+        while all.len() > self.size {
+            all.remove(0);
+        }
+    }
+
+    pub(super) fn clear(&self) {
+        self.all().clear();
+    }
+}
+
+/// The chunks of voxel regions the process keeps.
+static SHARED: Shared = Shared::new(SHARED_SIZE);
 
 /// Whether chunk bakes are kept across games of the process. `SHARDS_VOXEL_CACHE=off` (the voxel
 /// module's switch, for tests and dev) turns it off.
-fn shared_on() -> bool {
+pub(super) fn shared_on() -> bool {
     !std::env::var("SHARDS_VOXEL_CACHE").is_ok_and(|v| matches!(v.trim(), "off" | "0" | "false" | "no"))
 }
 
 fn shared_get(key: &ChunkKey) -> Option<Arc<NavTile>> {
-    let mut all = SHARED.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    let at = all.iter().position(|(k, _)| k == key)?;
-    let entry = all.remove(at);
-    let tile = entry.1.clone();
-    all.push(entry);
-    Some(tile)
+    SHARED.get(key)
 }
 
 fn shared_put(key: ChunkKey, tile: Arc<NavTile>) {
-    let mut all = SHARED.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    all.retain(|(k, _)| *k != key);
-    all.push((key, tile));
-    while all.len() > SHARED_SIZE {
-        all.remove(0);
-    }
+    SHARED.put(key, tile);
 }
 
-/// Forgets every chunk bake the process keeps (tests: a cold bake after a warm one).
+/// Forgets every chunk bake the process keeps, a voxel region's and the levels' (tests: a cold
+/// bake after a warm one).
 pub fn clear_shared_bakes() {
-    SHARED.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clear();
+    SHARED.clear();
+    super::levels::clear_shared();
 }
 
 /// What a chunk bake sees of the physics world, and nothing else: the voxel fields, shared, and
@@ -158,7 +188,7 @@ fn volume_hash(baked: &PhysicsWorld) -> u64 {
 }
 
 /// FNV over the nav settings of a body class, as a bake of a tile hashes them.
-fn settings_hash(settings: &NavSettings) -> u64 {
+pub(super) fn settings_hash(settings: &NavSettings) -> u64 {
     let mut text = format!("cell {:?} drop {:?} body {} agent ", settings.cell, settings.safe_drop, settings.body);
     if let Ok(agent) = serde_json::to_value(&settings.agent) {
         compact(&agent, &mut text);
@@ -246,7 +276,7 @@ impl Source {
 }
 
 /// Whether the process's chunk bakes are read and written for the bakes of this world.
-fn sharing(world: &World) -> bool {
+pub(super) fn sharing(world: &World) -> bool {
     shared_on() && !world.get_resource::<NavBakes>().is_some_and(|b| b.isolated)
 }
 
@@ -256,7 +286,7 @@ fn kept(world: &World, shared: bool, key: &ChunkKey) -> Option<Arc<NavTile>> {
     own.or_else(|| if shared { shared_get(key) } else { None })
 }
 
-fn hash_of(key: &ChunkKey) -> String {
+pub(super) fn hash_of(key: &ChunkKey) -> String {
     hex(fnv(format!("{key:?}").as_bytes()))
 }
 
@@ -405,6 +435,7 @@ pub(super) fn build(world: &mut World, settings: &NavSettings, cut: Cut, prebake
         components: Vec::new(),
         report,
         voxel: None,
+        levels: None,
         carve: Carve::default(),
     };
     // Solids placed in the region (not the field, not the sea) carve it, as they carve tiles.

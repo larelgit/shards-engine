@@ -41,6 +41,13 @@ Read this when you touch regions, tiles, levels, the generator, the navmesh or t
   see it. A change to the ground probe, the step rule or the sampler changes both kinds of bakes: raise `BAKE_VERSION` for the tiles; the
   chunks have no file to go stale, and the test `chunks_stitched_are_the_grid_baked_in_one_piece` (and the sandbox island's) holds the stitching to the
   grid baked in one piece. Only machines that simulate bake (`NetRole`). See `docs/manual.md`, "Voxel regions", "Navigation".
+- **The navmesh of hand-made levels is baked in memory too** (`shards_npc::nav::region::levels`): with no region loaded, the levels
+  placed by id whose definition says `nav: true` (`LevelDef::nav`) are baked from their own static solids (movers and what has `Health` left out: they carve),
+  in chunks of `LEVEL_CHUNK` columns on a world-aligned grid, each from the solids within the body's reach of it, kept under a `ChunkKey`
+  whose hash is those solids and the grid's corner, and stitched as a volume's chunks are. `refresh` makes it again when `PlacedLevels`
+  or content changes or a baked solid goes or moves (`levels::current`); a level without `nav` builds nothing and changes nothing, so a
+  game's replays hold. A change to the probe, the step rule or the sampler changes these bakes as it changes the others; they have no
+  file to go stale. Tests: `crates/shards_npc/tests/npc/level_nav.rs`. See `docs/manual.md`, "The navmesh of hand-made levels".
 - **World state in the snapshot.** New region, level or navigation state outside entities with `AiId` goes in `add_snapshot_resource`;
   what is built from the saved data (the region from its manifest, the navmesh) goes in `add_snapshot_prepare` / `add_snapshot_rebuild`; what
   the world is built around goes in `add_snapshot_check`. Cover it with a test modelled on `crates/sandbox/tests/sandbox/snapshots.rs`

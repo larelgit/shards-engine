@@ -7,6 +7,7 @@
 //!         file: "levels/arena.gltf",
 //!         required_markers: [(kind: "spawn", name: "start"), (kind: "landmark", min: 1)],
 //!         at: (0.0, 0.0, 0.0),
+//!         nav: true,
 //!     ),
 //! }
 //! ```
@@ -43,6 +44,13 @@ pub struct LevelDef {
     /// level unless told otherwise.
     #[serde(default)]
     pub at: Vec3,
+    /// Whether NPCs get a navmesh of the level: where no region is loaded, the levels placed by
+    /// id that say so are baked in memory as they are placed (their static solids; doors and
+    /// what the game spawns carve it), and NPCs route on it: up stairs, onto walkways, down
+    /// again (the NPC module's `nav`, "Hand-made levels"). Without it NPCs in the level plan on
+    /// the local grid, in the plane.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub nav: bool,
 }
 
 impl ContentDef for LevelDef {
