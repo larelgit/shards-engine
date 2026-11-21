@@ -84,7 +84,7 @@ What was checked for the acceptance of phase C (Windows, debug build; `cargo tes
 | E3. Actions, combat, animation | A | ✅ combat driven by data, the animation bridge, telegraphs |
 | E4. Content and levels | A (part), B, D | ✅ base, prefabs, `content check`, levels from Blender (the pipeline is checked on a real export from Blender 5.2.2 LTS; the `ruin.gltf` of the sandbox and of the template is also a Blender export, the glTF Embedded variant) |
 | E5. World generation | B | 🟡 generator, solver, checks, manifest, dungeons, reports, region change, active zones — ✅; only the tile picture streams (the geometry for physics loads in full: a full-size region loads in 0.6 s, so streaming it is not needed yet) |
-| E6. Navigation and enemy AI | B | ✅ navmesh by tiles and body classes, behaviour, perception, director, planner, avoiding bodies (selective RVO); gunfire, hiding, ranged fighters, turrets (F11); scripted sequences (F12) |
+| E6. Navigation and enemy AI | B | ✅ navmesh by tiles and body classes (and of hand-made levels that ask, `nav: true`, baked in memory), behaviour, perception, director, planner, avoiding bodies (selective RVO); gunfire, hiding, ranged fighters, turrets (F11); scripted sequences (F12) |
 | E7. Networking and co-op | C | ✅ transport, session, input, replication, joining and leaving, prediction and smoothing, network overlay (`shards_net`), network CLI and stand scenarios, long sessions with `shards soak`; acceptance — half an hour with three players at 150 ms and 2 % loss, without a desync |
 | E8. Saves and settings | C | ✅ saves (1–5, `shards_save`), player settings (6, `shards_settings`) and saves in co-op (7, `shards::coop`) |
 | E9. UI, audio, localization | D | ✅ UI, localization and audio |

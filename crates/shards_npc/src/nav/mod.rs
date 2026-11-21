@@ -26,6 +26,14 @@
 //! ([`NavRegion`]). A tile without a fresh bake file is baked right then, with a journal
 //! warning.
 //!
+//! **Hand-made levels** have a navmesh too, without a region: a level whose definition says
+//! `nav: true` ([`LevelDef::nav`](shards_level::LevelDef::nav)) is baked in memory when it is
+//! placed by id, from its own static solids, in chunks of [`LEVEL_CHUNK`] columns stitched as
+//! a voxel region's are (`region::levels`). The levels that ask are one navmesh, kept under the
+//! same [`NavRegion`]; doors and what the game spawns carve it. A level that does not ask keeps
+//! the local grid, which plans in the plane: an NPC there never finds the stairs to a walkway
+//! over its head.
+//!
 //! A **route** ([`NavRegion::path`]) is A* over the tile graph for the corridor, grid A*
 //! inside the corridor's tiles, then string pulling checked against the grid and the
 //! physics world. Routes need no window and replay identically.
@@ -82,7 +90,10 @@ pub mod tile;
 pub(crate) mod tools;
 
 pub use query::{NavError, NavPath, NavQuery};
-pub use region::{bake_volume, chunk_files_sequential, clear_shared_bakes, prebake_volume, rebuild, refresh, ChunkKey, Cut, NavBakes, NavRegion, Prebaked, VoxelBake};
+pub use region::{
+    bake_volume, chunk_files_sequential, clear_shared_bakes, prebake_volume, rebuild, refresh, ChunkKey, Cut, LevelBake, NavBakes, NavRegion, Prebaked,
+    VoxelBake, LEVEL_CHUNK,
+};
 pub use settings::{NavBodyDef, NavSettings, NavSettingsDef, DEFAULT_BODY};
 pub use tile::NavTile;
 pub use tools::{bake_files, bake_region, BakeReport, NavOverlay};
@@ -173,10 +184,14 @@ pub fn region_is_volume(world: &World) -> bool {
     world.get_resource::<ActiveRegion>().is_some_and(|r| r.manifest.layout == shards_world::manifest::Layout::Volume)
 }
 
-/// The navmesh of the region in the world, when it is built for that region.
+/// The navmesh of the region in the world, when it is built for that region; without a region,
+/// the navmesh of the hand-made levels placed now that ask for one ([`NavRegion::levels`]).
 pub fn region_nav(world: &World) -> Option<&NavRegion> {
     let nav = world.get_resource::<NavRegion>()?;
-    (world.get_resource::<ActiveRegion>().map(|r| r.hash) == Some(nav.hash)).then_some(nav)
+    match world.get_resource::<ActiveRegion>() {
+        Some(region) => (region.hash == nav.hash && nav.levels.is_none()).then_some(nav),
+        None => region::levels_current(world, nav).then_some(nav),
+    }
 }
 
 /// The navmesh of the tightest body class that serves a body of `params`.
@@ -229,7 +244,8 @@ pub(crate) fn route_source<'w>(world: &'w World, params: &CharacterParams, at: O
         return RouteSource::Provider(paths.name);
     }
     let grid = |why: &str, region: bool| RouteSource::LocalGrid { why: why.to_owned(), region };
-    if world.get_resource::<ActiveRegion>().is_none() {
+    // Without a region, the levels that ask for a navmesh have one.
+    if world.get_resource::<ActiveRegion>().is_none() && region_nav(world).is_none() {
         return grid("no region loaded", false);
     }
     let Some(nav) = region_nav(world) else {
@@ -240,7 +256,8 @@ pub(crate) fn route_source<'w>(world: &'w World, params: &CharacterParams, at: O
     };
     // A start the region does not cover is the local grid's (`NavError::NotCovered`).
     if at.is_some_and(|at| nav.instance_at(nav.column_of(at)).is_none()) {
-        return grid("the NPC stands outside the region", true);
+        let outside = if nav.levels.is_some() { "the NPC stands outside the levels that have a navmesh" } else { "the NPC stands outside the region" };
+        return grid(outside, true);
     }
     match nav.serving(params) {
         Some(class) => RouteSource::Navmesh(class),

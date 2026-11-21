@@ -145,7 +145,7 @@ impl NavRegion {
         if self.component(start) != self.component(goal) {
             let (a, b) = (tile(start), tile(goal));
             // A voxel region is cut into chunks, whose edges are all open; a region of tiles has sockets.
-            let (noun, between) = if self.voxel.is_some() { ("chunk", "walls, cliffs or water") } else { ("tile", "walls, cliffs, water or tile edges whose sockets do not connect") };
+            let (noun, between) = if self.chunked() { ("chunk", "walls, cliffs or water") } else { ("tile", "walls, cliffs, water or tile edges whose sockets do not connect") };
             return Err(NavError::NoRoute(format!(
                 "the goal {} is on ground the start cannot reach at all ({noun} ({}, {}) from {noun} ({}, {})): {between} lie between; aim for a point on the start's side",
                 fmt_pos(query.to),
@@ -344,7 +344,7 @@ impl NavRegion {
     /// has a reason to stay in. A region of tiles keeps the corridor as it is: its tiles are
     /// separate places. Sorted, once each.
     fn widened(&self, tiles: &[u32]) -> Vec<u32> {
-        if self.voxel.is_none() {
+        if !self.chunked() {
             return tiles.to_vec();
         }
         let mut out = tiles.to_vec();

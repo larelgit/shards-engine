@@ -52,7 +52,10 @@ use shards_world::grid::{rotation, turn, turns_of, Dir};
 use shards_world::manifest::Layout;
 use shards_world::{ActiveRegion, RegionGraph, TileId};
 
+mod levels;
 mod volume;
+pub(crate) use levels::current as levels_current;
+pub use levels::{LevelBake, LEVEL_CHUNK};
 pub use volume::{bake_volume, chunk_files_sequential, clear_shared_bakes, prebake_volume, ChunkKey, Cut, Prebaked, VoxelBake};
 
 use super::bake::{bake, dijkstra, solid};
@@ -433,6 +436,9 @@ pub struct NavRegion {
     pub report: NavReport,
     /// How a voxel region's chunks were baked (`None`: tiles).
     pub voxel: Option<VoxelBake>,
+    /// The levels it is the navmesh of and how their chunks were baked, when it is the navmesh
+    /// of hand-made levels and not of a region (`region::levels`).
+    pub levels: Option<LevelBake>,
     carve: Carve,
 }
 
@@ -690,6 +696,12 @@ impl NavRegion {
         format!("no body class serves the body: {}", lacks.join("; "))
     }
 
+    /// Whether it is cut into chunks of one ground, whose edges are only seams (a voxel region,
+    /// hand-made levels), and not made of tiles with sockets.
+    pub fn chunked(&self) -> bool {
+        self.voxel.is_some() || self.levels.is_some()
+    }
+
     /// The settings it was built with (carving and stitching again use its own body).
     pub fn settings(&self) -> NavSettings {
         NavSettings { cell: self.cell, safe_drop: self.safe_drop, agent: self.agent.clone(), dir: String::new(), body: self.body.clone() }
@@ -698,7 +710,7 @@ impl NavRegion {
     /// `64 tiles, 16384 nodes, 896 links across edges, 2 navlinks`.
     pub fn summary(&self) -> String {
         let links = self.navlinks.iter().filter(|l| l.nodes.is_some()).count();
-        let noun = if self.voxel.is_some() { "chunks" } else { "tiles" };
+        let noun = if self.chunked() { "chunks" } else { "tiles" };
         format!(
             "{} {noun}, {} nodes, {} links across edges, {} navlinks",
             self.instances.len(),
@@ -715,15 +727,18 @@ pub(crate) fn region_loaded(world: &mut World) {
 }
 
 /// Builds the navmesh of the region in the world now, of every body class (or removes a
-/// stale one when there is no region, or it cannot be built), and journals what it did. Also
+/// stale one when there is no region, or it cannot be built), and journals what it did. Without a
+/// region, the navmesh of the hand-made levels that ask for one (`region::levels`). Also
 /// what a snapshot load runs: the navmesh is a pure function of the region, content and the
 /// solids standing, so the one made again is the one the saved game had.
 pub fn rebuild(world: &mut World) {
     world.remove_resource::<NavRegion>();
     world.remove_resource::<NavFailed>();
     let Some(region) = world.get_resource::<ActiveRegion>().map(|r| r.hash) else {
+        levels::rebuild(world);
         return;
     };
+    world.remove_resource::<levels::NoLevelNav>();
     // A machine that does not simulate (a co-op client) never plans a route: the host's NPCs
     // walk, and its own navmesh is the host's business. A voxel region's bake is the one second
     // it would save.
@@ -736,33 +751,43 @@ pub fn rebuild(world: &mut World) {
     let classes = NavSettings::all(world.resource::<ContentDb>());
     // A voxel region's chunks, of every body class at once, on the compute pool.
     let pre = if super::region_is_volume(world) { prebake_volume(world, &classes, Cut::Chunks).ok() } else { None };
-    let pre_of = |k: usize| pre.as_ref().map(|(counts, took)| (counts[k], *took));
-    match build(world, &classes[0], pre_of(0)) {
-        Ok(mut nav) => {
-            let mut lines = vec![(JournalKind::Event, format!("navmesh: {} ({})", nav.title, nav.summary()))];
-            report_lines(&nav, "navmesh", &mut lines);
-            for (k, settings) in classes.iter().enumerate().skip(1) {
-                let label = format!("navmesh (body {})", settings.body);
-                match build(world, settings, pre_of(k)) {
-                    Ok(class) => {
-                        lines.push((JournalKind::Event, format!("{label}: {}", class.summary())));
-                        report_lines(&class, &label, &mut lines);
-                        nav.bodies.push(class);
-                    }
-                    Err(why) => lines.push((JournalKind::Warn, format!("{label}: none for this region: {why}; bodies of its size plan on the local grid"))),
-                }
+    let mut pre_of = pre.iter().flat_map(|(counts, took)| counts.iter().map(|count| (*count, *took)));
+    if let Err(why) = install(world, &classes, "this region", |world, settings| build(world, settings, pre_of.next())) {
+        let content = content_changed(world);
+        world.insert_resource(NavFailed { region, content, simulating: super::simulates(world) });
+        journal::emit(world, JournalKind::Warn, format!("navmesh: none for this region: {why}; NPCs plan on the local grid"));
+    }
+}
+
+/// Builds the navmesh of every body class of `classes` with `build` (called once per class, in
+/// order), makes it the world's and journals what was built; `place` is what it is the navmesh
+/// of, for the journal (`this region`). Why there is none, when the first class (`agent`) cannot
+/// be built: nothing is inserted then.
+fn install(
+    world: &mut World,
+    classes: &[NavSettings],
+    place: &str,
+    mut build: impl FnMut(&mut World, &NavSettings) -> Result<NavRegion, String>,
+) -> Result<(), String> {
+    let mut nav = build(world, &classes[0])?;
+    let mut lines = vec![(JournalKind::Event, format!("navmesh: {} ({})", nav.title, nav.summary()))];
+    report_lines(&nav, "navmesh", &mut lines);
+    for settings in classes.iter().skip(1) {
+        let label = format!("navmesh (body {})", settings.body);
+        match build(world, settings) {
+            Ok(class) => {
+                lines.push((JournalKind::Event, format!("{label}: {}", class.summary())));
+                report_lines(&class, &label, &mut lines);
+                nav.bodies.push(class);
             }
-            world.insert_resource(nav);
-            for (kind, line) in lines {
-                journal::emit(world, kind, line);
-            }
-        }
-        Err(why) => {
-            let content = content_changed(world);
-            world.insert_resource(NavFailed { region, content, simulating: super::simulates(world) });
-            journal::emit(world, JournalKind::Warn, format!("navmesh: none for this region: {why}; NPCs plan on the local grid"));
+            Err(why) => lines.push((JournalKind::Warn, format!("{label}: none for {place}: {why}; bodies of its size plan on the local grid"))),
         }
     }
+    world.insert_resource(nav);
+    for (kind, line) in lines {
+        journal::emit(world, kind, line);
+    }
+    Ok(())
 }
 
 /// The journal's warnings about a navmesh just built (bakes made while loading, tiles that
@@ -800,18 +825,31 @@ fn content_changed(world: &World) -> bevy::ecs::change_detection::Tick {
     world.get_resource_ref::<ContentDb>().map_or_else(Default::default, |db| db.last_changed())
 }
 
-/// The navmesh is the region's: built for it and up to date with the solids standing now
-/// (carved). Inside ticks and in tools; a pure function of the world, so playback and a game
-/// loaded from a snapshot agree.
+/// The navmesh is the region's (or, without a region, the levels'): built for it and up to date
+/// with the solids standing now (carved). Inside ticks and in tools; a pure function of the
+/// world, so playback and a game loaded from a snapshot agree.
 pub fn refresh(world: &mut World) {
-    let Some(region) = world.get_resource::<ActiveRegion>().map(|r| r.hash) else { return };
-    if world.get_resource::<NavRegion>().is_none_or(|nav| nav.hash != region) {
-        let failed = world.get_resource::<NavFailed>().copied();
-        if failed.is_some_and(|f| f.region == region && f.content == content_changed(world) && f.simulating == super::simulates(world)) {
-            return;
+    match world.get_resource::<ActiveRegion>().map(|r| r.hash) {
+        Some(region) => {
+            if world.get_resource::<NavRegion>().is_none_or(|nav| nav.hash != region || nav.levels.is_some()) {
+                let failed = world.get_resource::<NavFailed>().copied();
+                if failed.is_some_and(|f| f.region == region && f.content == content_changed(world) && f.simulating == super::simulates(world)) {
+                    return;
+                }
+                rebuild(world);
+                return;
+            }
         }
-        rebuild(world);
-        return;
+        None => {
+            // The levels placed, content or a baked solid changed: made again (kept chunks are
+            // not baked twice). No level asks for one: nothing to do, until that changes.
+            if !world.get_resource::<NavRegion>().is_some_and(|nav| levels::current(world, nav)) {
+                if !(world.get_resource::<NavRegion>().is_none() && levels::settled(world)) {
+                    rebuild(world);
+                }
+                return;
+            }
+        }
     }
     let changed = match (world.get_resource::<NavRegion>(), world.get_resource::<PhysicsWorld>()) {
         (Some(nav), Some(physics)) => nav.classes().any(|c| c.carve.differs(physics)),
@@ -824,11 +862,12 @@ pub fn refresh(world: &mut World) {
     let tiles = tile_ids(world);
     let mut nav = world.remove_resource::<NavRegion>().expect("checked above");
     let physics = world.resource::<PhysicsWorld>();
-    // A volume's chunks all meet; a region of tiles has the sockets' say.
-    let edges = world.get_resource::<ActiveRegion>().and_then(|r| match r.manifest.layout {
-        Layout::Volume => Some(Edges::Open),
-        _ => r.graph.as_ref().map(Edges::Graph),
-    });
+    // A volume's chunks all meet, and the levels'; a region of tiles has the sockets' say.
+    let edges = match world.get_resource::<ActiveRegion>() {
+        Some(r) if r.manifest.layout == Layout::Volume => Some(Edges::Open),
+        Some(r) => r.graph.as_ref().map(Edges::Graph),
+        None => Some(Edges::Open),
+    };
     // Each class with its own body.
     let carve = |class: &mut NavRegion| {
         let settings = class.settings();
@@ -839,6 +878,10 @@ pub fn refresh(world: &mut World) {
     carve(&mut nav);
     nav.bodies.iter_mut().for_each(carve);
     world.insert_resource(nav);
+    // A solid the levels' chunks were baked from went or moved: they are baked again.
+    if world.get_resource::<ActiveRegion>().is_none() && !world.get_resource::<NavRegion>().is_some_and(|nav| levels::current(world, nav)) {
+        rebuild(world);
+    }
 }
 
 /// The `TileId` of every region entity with a collider.
@@ -939,6 +982,7 @@ fn build(world: &mut World, settings: &NavSettings, prebaked: Option<(Prebaked, 
         components: Vec::new(),
         report,
         voxel: None,
+        levels: None,
         carve: Carve::default(),
     };
     nav.update(physics, settings, &tiles, None);
@@ -1083,6 +1127,10 @@ impl NavRegion {
     fn zone_of(&self, c: &ColliderInfo, tiles: &BTreeMap<ColliderId, TileId>, settings: &NavSettings, reach: f32) -> Vec<NodeId> {
         #[expect(clippy::disallowed_methods, reason = "carving tracks the colliders only; a voxel field is never carved (it does not change after it is built)")]
         let (min, max) = c.bounds();
+        // The levels' chunks are all baked from the same solids: none of them is news to any.
+        if self.levels.as_ref().is_some_and(|bake| bake.has(c.id)) {
+            return Vec::new();
+        }
         let owner = tiles.get(&c.id).and_then(|t| {
             let cell = [t.x, t.y];
             self.instances.iter().position(|i| i.cell == cell).map(|i| i as u32)
@@ -1165,6 +1213,12 @@ impl NavRegion {
         if gone.is_empty() && came.is_empty() {
             self.carve.seen = seen;
             return false;
+        }
+        // A solid the levels' chunks were baked from is no longer where it was baked.
+        if let Some(bake) = &mut self.levels
+            && gone.iter().any(|old| bake.has(old.id))
+        {
+            bake.mark_stale();
         }
         let reach = settings.agent.radius + self.cell * 0.5 + 0.05;
         let mut boxes: Vec<(Vec3, Vec3)> = Vec::with_capacity(gone.len() + came.len());
@@ -1711,6 +1765,7 @@ mod tests {
             components: Vec::new(),
             report: NavReport::default(),
             voxel: None,
+            levels: None,
             carve: Carve::default(),
         }
     }

@@ -2764,7 +2764,7 @@ What the real export showed, and what was fixed in the engine:
 
 The rest matched what is described here: axes and scales, node paths, all the markers, collider shapes and sizes, prefabs and components, `content check`, `level_info`, `spawn_level`, `level_reload` and hot reload. The glTF Embedded variant is read and drawn the same way as `.glb` (`the_glb_and_the_embedded_gltf_read_and_spawn_alike`). Not checked on export: animation and skins (the level pipeline does not read them).
 
-**The file in the content.** The `level` kind (`LevelDef`): the file path, the required markers, the default place.
+**The file in the content.** The `level` kind (`LevelDef`): the file path, the required markers, the default place. With `nav: true` the level is baked into a navmesh when it is placed with no region loaded ("The navmesh of hand-made levels").
 
 ```ron
 // content/region/ruin.level.ron
@@ -3824,6 +3824,57 @@ $ shards act nav_info
 Movement tools ask the navmesh through the movement route planner (`RoutePlanner`, which `shards_npc` installs):
 `move_to path=true` and `path_to` get a route from it (in a region, and for a body the navmesh serves; otherwise, a local
 grid of 0.5 m cells), and `clearance` is how far the navmesh reaches in each direction (`reach`). Both use the tightest body class that serves the walker's body. A snapshot does not save the navmesh: after a snapshot loads, it is built again (for each class), for the region and the bodies that the snapshot brought back.
+
+### The navmesh of hand-made levels
+
+A game whose world is level files placed by id (`spawn_level_by_id`: a chapter's rooms, a hub) has no region, so
+there are no tiles to bake. Its NPCs plan on the local grid, which plans in the plane around the body: an NPC under a
+player on a walkway stands under him, and one on the floor never finds the stairs up. A level gets a navmesh by
+saying so in its definition:
+
+```ron
+// content/levels/arena.level.ron
+{ "arena": (file: "levels/arena.gltf", nav: true) }
+```
+
+While no region is loaded, the levels placed by id that say `nav: true` are **baked in memory as they are placed**,
+inside the first refresh after it (the first tick, or a tool), and are one `NavRegion`: routes, `nav_path`, `path_to`,
+`move_to path=true`, `clearance`, NPC routes and `plain_sight`, carving and the overlay work as in a region. Nothing
+is written to `assets/nav/`, `--check-content` asks for no bake file, and `--bake-nav` does not touch it. A level
+that does not say so keeps the local grid, so a game that changes nothing plays as it did.
+
+- **What is baked.** The static solids of the levels that ask: every entity they spawned that stands still on the
+  `WORLD` layer (floors, walls, stairs, props). Movers are left out: a door is a solid the bake never saw, so it
+  carves its doorway while it rests shut and gives it back when it rests open, as a door laid in a region does.
+  So is what has `Health`: a crate that can be broken carves the ground it stands on and gives it back the tick it
+  goes, with nothing baked again. Everything that is not the levels' own (a level without `nav`, what the game
+  spawned later) carves too.
+- **Chunks.** The ground is cut into squares of 32 columns (16 m at the nav settings' 0.5 m `cell`) on a grid
+  aligned to the world. Each square with solids is one bake per body class, sampled at its place through the same
+  flood, move rule and assembly as a tile's, from the solids within the body's reach of it alone. The chunks are
+  stitched across every edge, diagonals too, as a voxel region's are.
+- **Several levels** that ask are one navmesh: a walk from one into the next is a walk, with no navlink.
+- **Kept bakes.** A chunk's bake is kept under what it is a function of (its solids, its place, the body class and
+  the nav settings), in the world and in the process. A chapter played again, a checkpoint or a snapshot loaded,
+  and the next test of a game's suite bake nothing twice; a level placed beside the first bakes only its own squares.
+- **Kept up to date.** The navmesh is made again when a level is placed, taken away or loaded again, and when
+  content changes. A baked solid that goes or moves (the game took a wall away) makes it again too, and only the
+  chunks it stood in are baked. Making it again places, carves and stitches every chunk, for every body class at once
+  on the compute pool: about 0.1 s for 50 chunks, so give what goes in play `Health` or make it a mover.
+- **Body classes and `safe_drop`** come from the `nav` settings, as for a region. An NPC routes on the tightest class
+  that serves its body; one no class serves, or one that stands outside the levels that have a navmesh, plans on the
+  local grid (`npc_state` says which: `navmesh, body agent`, or `local grid: …`).
+- **Only machines that simulate** bake, as for a voxel region. With a region loaded the navmesh is the region's, and
+  levels laid on it carve it, as before.
+
+```text
+$ shards act nav_info
+{ "bake": "in memory, 6 chunks, baked in 41 ms", "levels": ["arena"], "region": "levels arena",
+  "summary": "6 chunks, 3105 nodes, 412 links across edges, 0 navlinks", … }
+```
+
+The journal says it once per build: `navmesh: levels arena (6 chunks, 3105 nodes, …)`. Tests:
+`crates/shards_npc/tests/npc/level_nav.rs`.
 
 ### Navigation agents
 

@@ -41,6 +41,7 @@ crates/shards_motion/src/overlay.rs :: for c in physics.colliders() { :: the col
 crates/shards_motion/src/perception/terrain.rs :: .filter_map(|(entity, _)| self.physics.collider(entity).map(|c| c.bounds().1.y)) :: water surfaces are the tops of water volumes, which stay boxes
 crates/shards_npc/src/director.rs :: pub(crate) type Targets<'w, 's> = Query<'w, 's, (&'static Transform, Has<Dead>, Option<&'static Collider>, Has<Downed>)>; :: the director's targets are characters; a body's size sets the reach
 crates/shards_npc/src/nav/bake.rs :: .colliders() :: a tile bake stores its static colliders for carving; by decision a chunk bake stores none for its field, which the volume hash names instead (the voxel design, 6.3 and 9)
+crates/shards_npc/src/nav/region/levels.rs :: .colliders() :: the navmesh of hand-made levels is baked from the levels' own static colliders, and only where no region is loaded; a voxel field is a region's
 crates/shards_npc/src/nav/region/volume.rs :: for c in baked.colliders() { :: the world a chunk bake sees holds the voxel field (not a collider) and the static water volumes only; the volumes' shapes and places go into the key of the bake, the field's own hash is its bits
 crates/shards_npc/src/nav/region.rs :: let mut now = physics.colliders().filter(|c| tracked(c)); :: carving tracks static colliders and water; a field never changes after it is built
 crates/shards_npc/src/nav/region.rs :: .colliders() :: kinematic WORLD colliders (movers); a field is never kinematic

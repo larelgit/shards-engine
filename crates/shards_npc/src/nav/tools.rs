@@ -188,7 +188,8 @@ fn nav_overlay(In(call): In<Call<NavOverlayArgs>>, world: &mut World) -> ToolRes
     Ok(format!("nav overlay {}", if on { "on" } else { "off" }))
 }
 
-/// The navmesh of the region in the world: its tiles, nodes, links across tile edges,
+/// The navmesh of the region in the world (or, without a region, of the levels that ask for one,
+/// `levels`): its tiles, nodes, links across tile edges,
 /// navlinks, carved cells, and which tiles were baked while loading; and its body classes
 /// (`bodies`: each class's body and navmesh). Read-only.
 fn nav_info(In(_): In<Call<NoArgs>>, world: &mut World) -> ToolResult<Value> {
@@ -203,7 +204,9 @@ fn nav_info(In(_): In<Call<NoArgs>>, world: &mut World) -> ToolResult<Value> {
         }));
     }
     let Some(nav) = world.get_resource::<NavRegion>() else {
-        return Err("no navmesh: no region is loaded (NPCs and `move_to path=true` plan on the local grid); load one with `regen`".into());
+        return Err("no navmesh: no region is loaded and no level placed asks for one (NPCs and `move_to path=true` plan on the local grid); \
+                    load a region with `regen`, or give a level `nav: true` in its `level` definition"
+            .into());
     };
     let links: Vec<Value> = nav
         .navlinks
@@ -237,8 +240,8 @@ fn nav_info(In(_): In<Call<NoArgs>>, world: &mut World) -> ToolResult<Value> {
                 "baked_while_loading": c.report.missing.iter().chain(&c.report.stale).collect::<Vec<_>>(),
                 "failed": c.report.failed.iter().map(|(t, why)| format!("{t}: {why}")).collect::<Vec<_>>(),
             });
-            if let Some(voxel) = &c.voxel {
-                body["bake"] = json!(voxel.describe(timed));
+            if let Some(bake) = c.voxel.as_ref().or(c.levels.as_ref().map(|l| &l.bake)) {
+                body["bake"] = json!(bake.describe(timed));
             }
             body
         })
@@ -256,10 +259,13 @@ fn nav_info(In(_): In<Call<NoArgs>>, world: &mut World) -> ToolResult<Value> {
         "navlinks": links,
         "bodies": bodies,
     });
-    if let Some(voxel) = &nav.voxel {
+    if let Some(bake) = nav.voxel.as_ref().or(nav.levels.as_ref().map(|l| &l.bake)) {
         // `in memory, 16 chunks, baked in 123 ms`: the loaded machine's time, not state, so shown
         // only where timing is reported (as `voxel_info` does).
-        info["bake"] = json!(voxel.describe(timed));
+        info["bake"] = json!(bake.describe(timed));
+    }
+    if let Some(levels) = &nav.levels {
+        info["levels"] = json!(levels.levels);
     }
     Ok(info)
 }

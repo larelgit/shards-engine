@@ -66,6 +66,19 @@ git push origin v0.1.0
 Changes that land in the main branch after phases C–E (`0.4.0`) go here.
 
 ### Added
+- A navmesh for hand-made levels (the manual's "The navmesh of hand-made levels"). A `level` definition takes `nav: true`
+  (`LevelDef::nav`). While no region is loaded, the levels placed by id that say so are baked in memory as they are placed,
+  from their own static solids, in chunks of 32 columns (`LEVEL_CHUNK`) on a world-aligned grid, once per body class of the
+  `nav` settings, and are one `NavRegion` (`NavRegion::levels`, `LevelBake`): NPC routes, `plain_sight`, `nav_path`, `path_to`,
+  `move_to path=true` and `clearance` use it, so an NPC takes the stairs to a walkway over its head, which the local grid never
+  found. Movers and what has `Health` are left out of the bake and carve it (a shut door closes its doorway, a crate gives
+  its ground back when it is broken), as does everything that is not the levels' own. The body classes are built at once on
+  the compute pool. Chunk bakes are kept by what they are made from, in the world and the process (`clear_shared_bakes` forgets them
+  too), so levels placed again bake nothing twice; a baked solid that goes or moves bakes only its chunks again. Nothing is
+  written to `assets/nav/`. A level without `nav` builds nothing: a game that does not ask plays, and replays, as it did.
+  `region_nav` answers with the levels' navmesh where there is no region, `nav_info` names the levels (`levels`) and the bake,
+  and `routes_at` says `local grid: the NPC stands outside the levels that have a navmesh` for an NPC beyond it. Tests:
+  `crates/shards_npc/tests/npc/level_nav.rs`.
 - A voice cut short (the manual's "Audio (E9.5)", "Voices"): `shards::audio::stop(world, id, fade)` stops the voice that
   `play` started (`Played::Started { id, .. }`) before it plays out. It fades to silence over `fade` seconds on its
   clock and is let go, and its subtitle goes at once; `0` stops it at once. `Voice::stopping` (`Fading`) holds the
