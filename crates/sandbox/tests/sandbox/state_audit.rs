@@ -185,7 +185,8 @@ const OUTSIDE: &[(&str, &str)] = &[
     ("shards_npc::nav::NavPaths", "the path finder, set at build time"),
     ("shards_npc::nav::overlay::", "the navigation overlay: the picture"),
     ("shards_npc::nav::region::NavBakes", "baked navigation tiles by hash (a function of files and content) and a voxel region's chunks by key (a function of its field, its water and the nav settings; never written to files)"),
-    ("shards_npc::nav::region::NavRegion", "the active region's navmesh, made again by the snapshot rebuild `navmesh`"),
+    ("shards_npc::nav::region::NavRegion", "the active region's navmesh (without a region, the navmesh of the levels that ask for one), made again by the snapshot rebuild `navmesh`"),
+    ("shards_npc::nav::region::levels::NoLevelNav", "a note that the levels placed now ask for no navmesh (or it could not be built), so it is not tried again every tick: a function of the levels placed and content, made again by the snapshot rebuild `navmesh`"),
     ("shards_npc::nav::tools::NavOverlay", "the navigation overlay: the picture"),
     ("shards_npc::overlay::NpcOverlay", "the NPC overlay: the picture"),
     // shards_rules
