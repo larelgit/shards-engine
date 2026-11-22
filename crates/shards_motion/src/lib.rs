@@ -86,7 +86,7 @@ pub use camera::{CameraSettings, FirstPersonCamera, LockHooks, LockOnDef, LockOn
 pub use eye::{aim_point_of, eye_of, look_dir, params_of};
 pub use controller::{
     character, CharacterController, CharacterParams, ControllerPlugin, ControllerSystems, Crouch, Crouched, Facing, Ghost, Jumped,
-    JumpedFlight, Landed, Launch, SprintResume, Stood,
+    JumpedFlight, LadderLetGo, Landed, Launch, SprintResume, Stood,
     LocomotionInput, Mantle, Mantled, ModeChanged, MotionMode, MotionState,
 };
 pub use controller::AccelModel;

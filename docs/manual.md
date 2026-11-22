@@ -1568,7 +1568,8 @@ onto the floor at the top, and a jump lets go. Nothing but the existing `Intent`
   ```
 
   **How to shape it.** The volume is the space the ladder takes, not the shaft it stands in: a box 0.3 to 0.5 m thick standing against the wall (its back on the wall's face), as wide as the
-  ladder, from the foot to **about half a metre over the floor it leads to** (it needs more than one tick of climbing; with none the body stops under the edge). It must be thicker than
+  ladder (and **thinner than twice the body's radius**: a body takes hold only from the volume's front, its middle on the `face` side of the volume's middle, and against the wall behind a
+  thicker box it never is), from the foot to **about half a metre over the floor it leads to** (it needs more than one tick of climbing; with none the body stops under the edge). It must be thicker than
   the distance a body runs in a tick, or a body that runs off the top passes it before it can take hold: 0.3 m caught a run of 8 m/s in the tests. **Something solid must stand behind it** where a body is to take hold of it
   from the ground or from a fall: the wall, or the ladder's own collider for one that stands free; a volume with nothing behind it is walked through, and can be climbed only by a body that came
   onto it from its top. The sensor never blocks anything, is not in a navmesh, and is drawn orange by `physics_overlay`.
@@ -1577,7 +1578,7 @@ onto the floor at the top, and a jump lets go. Nothing but the existing `Intent`
   | field | default | what |
   |---|---|---|
   | `ladder_speed` | 0 | how fast the body climbs (m/s), up, down and sideways; 0: the body does not climb, and a ladder is nothing to it. *Half-Life*'s is 5.08 |
-  | `ladder_jump_speed` | 2.5 | how fast a jump pushes the body off the ladder (m/s, level, out of `face`). 0: the jump only lets go, and a body still pushing in takes hold again |
+  | `ladder_jump_speed` | 2.5 | how fast a jump pushes the body off the ladder (m/s, level, out of `face`). 0: the jump only lets go |
   | `ladder_by_look` | `false` | *Half-Life*'s rule for a body with `face: Look`: the forward input goes along the look's pitch (looking up and pressing forward climbs, at 45 degrees up 1.41 times as fast; looking down and pressing forward goes down). `false`: the pitch does not count |
 
 - **Taking hold.** The body touches the volume from its front (its middle on the `face` side of the volume's middle), its movement input points into the ladder within 60 degrees, and
@@ -1590,18 +1591,23 @@ onto the floor at the top, and a jump lets go. Nothing but the existing `Intent`
 - **The top.** Once the feet are over the floor the ladder leads to (the way in is open for one radius and there is walkable ground there), pushing in walks the body in, level, still held,
   until its axis is over the floor; then it stands (`Ground`, no `Landed`), keeping its speed. A ladder that leads nowhere (the wall goes on) stops the climb where the hold would end.
 - **The foot.** A body on the ladder that is not climbing up stands on the ground as soon as it reaches it, and walks away.
-- **A jump** lets go: the body is pushed out of `face` at `ladder_jump_speed`, `Jumped` fires, and it is not caught again while it moves away from the ladder.
-- **The state** is the mode and nothing else: `MotionState::mode == MotionMode::Ladder` while the body is on a ladder (the event `ModeChanged` on the way on and off), and
-  `MotionState::velocity` is the climb's (its `y` is the speed up or down; zero while it hangs): what a game reads for step sounds and a view model's sway. No component and no resource were
-  added and no field of `MotionState` or `LocomotionInput`, so a body that never climbs hashes as it did; the ladder is found again each tick from what the capsule touches, so a snapshot, a
-  save and a replay need nothing more than the mode they already hold.
+- **A jump** lets go: the body is pushed out of `face` at `ladder_jump_speed`, `Jumped` fires, and it takes hold of no ladder while it goes on pushing into this one, whatever the air control
+  brings it back with (under `accel: Projected` the push of the air takes the jump's speed back in two ticks). The marker `LadderLetGo` on the body says so; it comes off once the body no
+  longer pushes into a ladder it touches (the input was let go for a tick, or the body fell clear of the volume) or is out of the air, and the next push into a ladder takes hold: a player
+  who jumps and keeps the key down falls to the foot, one who lets it go and presses again catches the ladder on the way.
+- **The state** is the mode: `MotionState::mode == MotionMode::Ladder` while the body is on a ladder (the event `ModeChanged` on the way on and off), and
+  `MotionState::velocity` is the climb's (its `y` is the speed up or down; zero while it hangs): what a game reads for step sounds and a view model's sway. The ladder itself is found again
+  each tick from what the capsule touches, and the only thing kept beside the mode is `LadderLetGo`, a reflected marker component (in snapshots and the replay hash, predicted for a client's
+  own body) that only a body that jumped off a ladder ever has. No resource was added and no field of `MotionState` or `LocomotionInput`, so a body that never climbs hashes as it did, and
+  a climb or a jump off goes on the same from what a snapshot holds (`a_climb_and_a_jump_off_go_on_the_same_from_what_a_save_holds`).
 - **Animation.** `ladder` is a motion mode name (`@mode:ladder`, `@left:ladder`, `off_in`, `drops`) and a `locomotion` state of an animation set (`"ladder": "climb"`; without a clip a set
   shows `idle`).
 - **For the AI.** The describer shows `ladder ↑3.5m/s`, `ladder ↓3.5m/s`, `ladder 3.5m/s` (sideways) and `ladder` (hanging); the journal has `e5 ground → ladder` and `e5 ladder → air`;
   `jump` answers `ok: jumping off the ladder` and `glide` refuses there; the coverage part `motion` has `ladder`. A ladder is climbed with the tools there are: `move dir=W` into it, and on.
 - **Not built**: a body that faces its movement (`face: Move`) is not turned to the ladder; `path_to`, `clearance` and `move_to path=true` do not know a ladder (they see the wall); NPCs do
   not use ladders (the `navlink` marker is the NPCs' way and has nothing to do with this volume); a co-op client's prediction of a climb runs the same code and was not tried on a stand.
-- **Tests**: `tests/motion/ladder.rs` (14: three metres up and off at the top with the volume half a metre over it, off the top's edge and down, hanging and a locked body, the jump, a fall
+- **Tests**: `tests/motion/ladder.rs` (17: three metres up and off at the top with the volume half a metre over it, off the top's edge and down, hanging and a locked body, the jump, the jump
+  with the push held under both models of the air, the push let go and taken again in the fall, a climb and a jump put back from their saved state, a fall
   caught, the strafe and the fall off the side, a ladder that leads nowhere, a volume with nothing behind it, a body with no `ladder_speed` against the same world without the ladder, the
   same inputs twice, the look's pitch, a ladder out of the water, the numbers and the written form, a fast runner with *Half-Life*'s numbers up and down); `shards_level`'s
   `tests/level/colliders.rs` (the node, a turned node, the messages).

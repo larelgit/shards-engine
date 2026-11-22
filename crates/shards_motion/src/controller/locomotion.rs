@@ -39,6 +39,9 @@ pub(crate) enum Note {
     Launched,
     Landed { fall_height: f32, impact_speed: f32, tier: u8, jumped: bool },
     Mantled { height: f32 },
+    /// The body jumped off a ladder (`true`: [`LadderLetGo`](super::LadderLetGo) goes on), or no longer
+    /// pushes into one after such a jump (`false`: it comes off).
+    LadderLetGo(bool),
     Entered(Entity),
     Exited(Entity),
 }
@@ -63,6 +66,9 @@ pub(crate) struct Step<'a, 'w> {
     pub crouched: bool,
     /// The look the body's yaw is bound to (`face: Look`): what `ladder_by_look` climbs by.
     pub look: Option<Gaze>,
+    /// The body jumped off a ladder and has pushed into it ever since
+    /// ([`LadderLetGo`](super::LadderLetGo)): it takes hold of none.
+    pub let_go: bool,
     pub notes: Vec<Note>,
 }
 
@@ -101,6 +107,14 @@ impl Step<'_, '_> {
         };
         let feet = if self.state.mode == MotionMode::Mantle { feet } else { self.mover.depenetrate(feet) };
         let feet = self.surroundings(feet);
+        // A jump off a ladder is over once the body stops pushing into the ladder, or is out of the air. The
+        // jump's own tick only set it.
+        if self.let_go
+            && !self.notes.contains(&Note::LadderLetGo(true))
+            && !(matches!(self.state.mode, MotionMode::Air | MotionMode::Glide) && self.pushes_into_ladder(feet).is_some())
+        {
+            self.notes.push(Note::LadderLetGo(false));
+        }
         let dt = self.dt;
         let s = &mut *self.state;
         s.jump_buffer_left = (s.jump_buffer_left - dt).max(0.0);
@@ -562,8 +576,10 @@ impl Step<'_, '_> {
     //   still held, until its axis is over the floor, and stands. A ladder that leads nowhere stops the
     //   climb where the hold would end.
     // - **The foot.** A body that is not climbing up stands on ground it reaches.
-    // - **Letting go.** A jump pushes the body off, out of the face; so does leaving the volume (sideways,
-    //   or down past its foot), and the fall starts there.
+    // - **Letting go.** A jump pushes the body off, out of the face, and the body takes hold of no ladder
+    //   while it goes on pushing into this one ([`LadderLetGo`](super::LadderLetGo), the one thing kept
+    //   beside the mode): air control must not bring it straight back. Leaving the volume (sideways, or down
+    //   past its foot) lets go too, and the fall starts there.
 
     /// The movement input as a ladder with the face `out` reads it.
     fn ladder_wish(&self, out: Vec3) -> LadderWish {
@@ -582,17 +598,21 @@ impl Step<'_, '_> {
         LadderWish { climb: lift - away, side: level - out * away, into: -wish.dot(out) }
     }
 
+    /// The face of the ladder the body at `feet` pushes into: it touches one from its front and its input
+    /// points into it within 60 degrees.
+    fn pushes_into_ladder(&self, feet: Vec3) -> Option<Vec3> {
+        let Ladder { out, .. } = self.mover.ladder(feet).filter(|l| l.front)?;
+        (self.wish().normalize_or_zero().dot(-out) >= PUSH_COS).then_some(out)
+    }
+
     /// Whether the body takes hold of a ladder at `feet` this tick (see "Taking hold" above).
     fn takes_hold(&self, feet: Vec3) -> bool {
-        if !self.params.can_climb_ladders() || self.input.locked {
+        if !self.params.can_climb_ladders() || self.input.locked || self.let_go {
             return false;
         }
-        let Some(Ladder { out, .. }) = self.mover.ladder(feet).filter(|l| l.front) else {
+        let Some(out) = self.pushes_into_ladder(feet) else {
             return false;
         };
-        if self.wish().normalize_or_zero().dot(-out) < PUSH_COS {
-            return false;
-        }
         match self.state.mode {
             // From the ground the push must climb: a look that sends it down has nowhere to go.
             MotionMode::Ground if self.ladder_wish(out).climb <= 0.0 => return false,
@@ -635,6 +655,8 @@ impl Step<'_, '_> {
             s.jump_buffer_left = 0.0;
             s.fall_from_y = Some(feet.y);
             self.notes.push(Note::Jumped);
+            self.notes.push(Note::LadderLetGo(true));
+            self.let_go = true;
             self.set_mode(MotionMode::Air);
             return self.air(feet);
         }

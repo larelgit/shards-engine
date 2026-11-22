@@ -126,6 +126,10 @@ fn a_body_that_stands_still_on_a_ladder_hangs_there() {
     assert_eq!((feet(&app, e), state(&app, e).mode), (held, MotionMode::Ladder));
 }
 
+fn let_go(app: &App, e: Entity) -> bool {
+    app.world().get::<LadderLetGo>(e).is_some()
+}
+
 #[test]
 fn a_jump_lets_go_with_a_push_out_of_the_ladder() {
     let mut app = app();
@@ -141,16 +145,97 @@ fn a_jump_lets_go_with_a_push_out_of_the_ladder() {
     assert!(s.velocity.x > 2.0 && s.velocity.x <= 2.5, "pushed east, out of the face, at ladder_jump_speed: {}", s.velocity);
     assert!(s.velocity.y <= 0.0, "a push, not a hop: {}", s.velocity);
     assert_eq!(seen(&app).jumped.len(), 1);
-    assert!(feet(&app, e).x > from.x, "{} from {from}", feet(&app, e));
-    // The next tick it still touches the volume and still pushes in, and is not caught again.
-    step(&mut app, 1);
-    assert_eq!(state(&app, e).mode, MotionMode::Air);
-    // Let go of the stick too: it falls to the ground in front of the ladder.
+    assert!(feet(&app, e).x > from.x && let_go(&app, e), "{} from {from}", feet(&app, e));
+    // Let go of the stick too: the marker of the jump goes, and the body falls to the ground in front of the ladder.
     walk(app.world_mut(), e, Vec3::ZERO);
+    step(&mut app, 1);
+    assert!(!let_go(&app, e));
     let ticks = drive(&mut app, 120, |w| w.get::<MotionState>(e).unwrap().mode != MotionMode::Ground);
     assert!(ticks < 120);
     assert_eq!(seen(&app).landed.len(), 1, "it fell: {:?}", seen(&app).landed);
     assert!(seen(&app).landed[0].fall_height > 1.0 && feet(&app, e).x > from.x + 0.2, "{:?} at {}", seen(&app).landed, feet(&app, e));
+}
+
+#[test]
+fn a_jump_lets_go_for_good_while_the_body_goes_on_pushing_in() {
+    // Both ways of steering the air: the stepped one drifts back to the wall in a third of a second, Half-Life's
+    // push takes the jump's 2.5 m/s back in two ticks. Neither takes hold again.
+    for params in [climber(), runner()] {
+        let mut app = app();
+        wall_with_ladder(app.world_mut(), 8.0);
+        let e = climber_at(&mut app, Vec3::new(2.0, SKIN, 0.0), params);
+        climb_to(&mut app, e, 5.0);
+        press_jump(app.world_mut(), e);
+        let ticks = drive(&mut app, 240, |w| w.get::<MotionState>(e).unwrap().mode != MotionMode::Ground);
+        assert!(ticks < 240, "{:?} at {}", state(&app, e).mode, feet(&app, e));
+        let changes = modes(&app, e);
+        assert_eq!(changes[changes.len() - 2..], [(MotionMode::Ladder, MotionMode::Air), (MotionMode::Air, MotionMode::Ground)], "{changes:?}");
+        assert!(seen(&app).landed.len() == 1 && seen(&app).landed[0].fall_height > 4.5, "five metres down: {:?}", seen(&app).landed);
+        // On the ground the jump is over: the same push climbs again.
+        step(&mut app, 3);
+        assert!(!let_go(&app, e) && state(&app, e).mode == MotionMode::Ladder, "{:?}", state(&app, e).mode);
+    }
+}
+
+#[test]
+fn letting_the_push_go_and_pushing_in_again_takes_hold_in_the_fall() {
+    let mut app = app();
+    wall_with_ladder(app.world_mut(), 8.0);
+    let e = climber_at(&mut app, Vec3::new(2.0, SKIN, 0.0), runner());
+    climb_to(&mut app, e, 6.0);
+    press_jump(app.world_mut(), e);
+    step(&mut app, 6);
+    assert!(state(&app, e).mode == MotionMode::Air && let_go(&app, e));
+    walk(app.world_mut(), e, Vec3::ZERO);
+    step(&mut app, 2);
+    walk(app.world_mut(), e, Vec3::NEG_X);
+    let ticks = drive(&mut app, 60, |w| w.get::<MotionState>(e).unwrap().mode == MotionMode::Air);
+    assert!(ticks < 60);
+    let (s, at) = (state(&app, e), feet(&app, e));
+    assert!(s.mode == MotionMode::Ladder && at.y > 2.0 && !let_go(&app, e), "caught again at {at}: {:?}", s.mode);
+    assert!(seen(&app).landed.is_empty());
+}
+
+/// The feet, the velocity and the mode of `e` over `ticks` ticks, bit for bit.
+fn trace(app: &mut App, e: Entity, ticks: u64) -> Vec<([u32; 6], MotionMode)> {
+    let mut trace = Vec::new();
+    drive(app, ticks, |w| {
+        let (at, s) = (w.get::<Transform>(e).unwrap().translation, w.get::<MotionState>(e).unwrap());
+        trace.push(([at.x, at.y, at.z, s.velocity.x, s.velocity.y, s.velocity.z].map(f32::to_bits), s.mode));
+        true
+    });
+    trace
+}
+
+#[test]
+fn a_climb_and_a_jump_off_go_on_the_same_from_what_a_save_holds() {
+    for jumped in [false, true] {
+        let mut first = app();
+        wall_with_ladder(first.world_mut(), 8.0);
+        let e = climber_at(&mut first, Vec3::new(2.0, SKIN, 0.0), runner());
+        climb_to(&mut first, e, 5.0);
+        if jumped {
+            press_jump(first.world_mut(), e);
+            step(&mut first, 3);
+            assert!(state(&first, e).mode == MotionMode::Air && let_go(&first, e));
+        }
+        // What a snapshot keeps of the body: its place, its motion, its input, and the marker of the jump.
+        let w = first.world();
+        let saved = (*w.get::<Transform>(e).unwrap(), w.get::<MotionState>(e).unwrap().clone(), w.get::<LocomotionInput>(e).unwrap().clone());
+        let marked = let_go(&first, e);
+        // A fresh world, the body put back from those alone.
+        let mut second = app();
+        wall_with_ladder(second.world_mut(), 8.0);
+        let twin = second.world_mut().spawn((Name::new("Hero"), CharacterController::default(), runner(), saved)).id();
+        if marked {
+            second.world_mut().entity_mut(twin).insert(LadderLetGo);
+        }
+        let (went_on, resumed) = (trace(&mut first, e, 90), trace(&mut second, twin, 90));
+        assert_eq!(went_on, resumed, "jumped: {jumped}");
+        // The climb goes on climbing; the jump goes on falling, and is not caught on the way down.
+        let first = if jumped { MotionMode::Air } else { MotionMode::Ladder };
+        assert!(went_on[..20].iter().all(|(_, mode)| *mode == first), "{:?}", &went_on[..20]);
+    }
 }
 
 #[test]

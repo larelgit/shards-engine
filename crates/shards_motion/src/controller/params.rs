@@ -326,7 +326,8 @@ pub struct CharacterParams {
     #[serde(skip_serializing_if = "is_zero")]
     pub ladder_speed: f32,
     /// How fast a jump pushes the body off a ladder (m/s, level, out of the ladder's face). 0: the jump
-    /// only lets go. The default is 2.5.
+    /// only lets go. The default is 2.5. Whatever the speed, the body takes hold of no ladder while it goes
+    /// on pushing into the one it jumped off ([`LadderLetGo`](super::LadderLetGo)).
     #[serde(skip_serializing_if = "ladder_jump_is_default")]
     pub ladder_jump_speed: f32,
     /// *Half-Life*'s rule for a body that faces its look (`face: Look`): on a ladder the forward input

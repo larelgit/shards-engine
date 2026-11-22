@@ -76,8 +76,10 @@ Changes that land in the main branch after phases C–E (`0.4.0`) go here.
   default 2.5 m/s). `ladder_by_look` (new, default off) is *Half-Life*'s rule: the forward input goes along the look's pitch.
   The body's state is the new `MotionMode::Ladder` (and `ModeChanged`); its velocity is the climb's. Animation sets get the
   mode name `ladder` and the locomotion state `ladder`; the describer shows `ladder ↑3.5m/s`; `physics_overlay` draws the
-  volume orange. Driven by the existing `Intent` only; no component, resource or field of `MotionState` was added, so a body
-  that does not climb moves and hashes as it did, and the three options are left out of the written form at their defaults.
+  volume orange. After a jump off a ladder the body takes hold of none while it goes on pushing into it (the reflected marker
+  `LadderLetGo`, on such a body only). Driven by the existing `Intent` only; no resource and no field of `MotionState` was added,
+  so a body that does not climb moves and hashes as it did, and the three options are left out of the written form at their
+  defaults.
   The navmesh leaves the volume out as it does every sensor.
 - A navmesh for hand-made levels (the manual's "The navmesh of hand-made levels"). A `level` definition takes `nav: true`
   (`LevelDef::nav`). While no region is loaded, the levels placed by id that say so are baked in memory as they are placed,
