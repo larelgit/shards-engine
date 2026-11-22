@@ -360,6 +360,14 @@ Changes that land in the main branch after phases C–E (`0.4.0`) go here.
   and the timing `field_timing` (`#[ignore]`) in `physics/world.rs`.
 
 ### Fixed
+- The navmesh of hand-made levels (the manual's "The navmesh of hand-made levels"): a goal by a wall, where the baked body has
+  no room in the goal's own column, took the roof or the floor above it for its node and had no route; a goal's node is now a
+  floor within 1.5 m of its height, in its column or within two meters, where there is one. A doorway narrower than the baked
+  body and a cell together could fall between two columns and cut the navmesh in two; where the levels' navmesh has no route,
+  `navmesh_path` now asks the local grid too (a region's navmesh still has the last word). And what building it reads of
+  content is the simulation's whoever asked for it first (a tick, a tool that only looks, a snapshot being loaded), so a replay
+  names the same definitions. Tests: `a_goal_by_a_wall_under_the_walkway_is_on_the_floor`,
+  `a_doorway_the_grid_misses_is_walked_on_the_local_grid`.
 
 - The engine rule `npc.strike_spacing` no longer blames an NPC whose strike began on the tick a boss later in `AiId` order that `ignores_spacing` began its own: the planner judges in `AiId` order, so the earlier NPC could not see the later press. Of two starts on one tick, the later in that order is the one held to the rule (two NPCs that both wait for the spacing still break it). Found by N8d's tests, the first to spawn a boss after its add. Test: `invariants.rs` (`a_noting_only_npc_is_not_held_to_the_rule_but_holds_the_others`, extended).
 - An NPC whose target stands at the edge of its leash reaches it to strike. The leash pulls an approach goal 0.5 m short of such a target (the room for a body), and the planner walked the NPC to within 0.85 of its window of that goal, so it could stop up to 0.5 m beyond its window and never strike (the den guard of `npc_navmesh.scenario`, from some start ticks: 2.06 m off with a window of 1.84 m). Both approaches of `shards_npc::planner` (to the chosen window and, with nothing chosen, to the nearest) now take `reach(within, goal, target)`: `within` less the pull, at least 0.3 m, never more than asked; an approach the leash does not pull is unchanged. `downed.scenario` loses the 60 ticks B5 added for this. Re-recorded: `npc_navmesh.json` (from tick 60 the den guard walks nearer its pulled goal: its `NpcDrive` `within`) and `downed.json` (60 ticks shorter); the other 17 reference replays are byte-identical; the template's `valley.json` (its raider `e17` reaches a player at the edge of its leash from tick 480: `NavAgent`, `NpcDrive`; `smoke.json` is unchanged). Tests: `planner::tests` (1), `tests/npc/nav.rs` (1: a grunt strikes a target at the edge of its leash).

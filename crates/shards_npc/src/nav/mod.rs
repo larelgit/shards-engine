@@ -159,9 +159,16 @@ pub fn route_on(world: &World, nav: &NavRegion, from: Vec3, to: Vec3, params: &C
 /// The engine's routes for a body of `params`: on the navmesh of the tightest class that
 /// serves it ([`navmesh_route`]) where that covers the walk, else on the local grid with the
 /// same body. A body taller than the class its radius fits is never walked as that class.
+///
+/// Where the navmesh of hand-made levels has no route, the local grid is asked too: that navmesh
+/// is a grid of cells fixed in the world, and a doorway narrower than the baked body and a cell
+/// together may fall between two columns and be a gap in it, which the local grid, centred on
+/// the walker and planned with its own body, walks through. (A region's navmesh has the last
+/// word: its tiles are made for its cells.)
 pub fn navmesh_path(world: &World, from: Vec3, to: Vec3, params: &CharacterParams) -> Option<Vec<Vec3>> {
     match navmesh_route(world, from, to, params, false) {
         Some(Ok(path)) => Some(path.points),
+        Some(Err(_)) if region_nav(world).is_some_and(|nav| nav.levels.is_some()) => local_grid_path(world, from, to, params),
         Some(Err(_)) => None,
         None => local_grid_path(world, from, to, params),
     }

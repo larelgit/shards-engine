@@ -12,7 +12,7 @@ use shards_level::{despawn_level, spawn_level_by_id, FromLevel, PlacedLevels};
 use shards_motion::perception::StepKind;
 use shards_motion::{CharacterParams, Mover, PhysicsWorld};
 use shards_npc::nav::{rebuild, refresh, NavBakes};
-use shards_npc::{plain_sight, region_nav, routes_at, NavPath, NavQuery, NavRegion};
+use shards_npc::{find_path, plain_sight, region_nav, routes_at, NavPath, NavQuery, NavRegion};
 
 use crate::common::*;
 
@@ -48,6 +48,11 @@ fn tower() -> String {
         let top = 0.25 * (k as f32 + 1.0);
         nodes.push(solid(&format!("Step.{k:02}"), [0.0, top * 0.5, 1.75 - 0.5 * k as f32], [2.0, top, 0.5]));
     }
+    // A rail along either side of the stairs, so their sides are no ledge to climb: the way up is from their foot.
+    // (A route may plan a climb onto a tread from its side, 1.5 m up, which the body, pressed against the stair,
+    // does not make: a tread is half a meter deep.)
+    nodes.push(solid("Rail.West", [-1.05, 2.25, -1.0], [0.1, 4.5, 6.0]));
+    nodes.push(solid("Rail.East", [1.05, 2.25, -1.0], [0.1, 4.5, 6.0]));
     // The door in the wall's gap: shut as the level is placed, it lifts 3 m to open.
     nodes.push(r#"{"name": "Door", "translation": [6.0, 1.25, 2.0], "extras": {"mover": "door", "collider": "box", "size": [0.3, 2.5, 2.0]}}"#.to_owned());
     // A barrel that can be broken, on the floor in the south-east chunk.
@@ -71,10 +76,19 @@ fn assets(name: &str) -> PathBuf {
         "tower": (file: "levels/tower.gltf", nav: true),
         "plain": (file: "levels/tower.gltf"),
         "annex": (file: "levels/annex.gltf", nav: true),
+        "rooms": (file: "levels/rooms.gltf", nav: true),
     }"#;
     std::fs::write(dir.join("content/tower.level.ron"), levels).unwrap();
     std::fs::write(dir.join("levels/tower.gltf"), tower()).unwrap();
     std::fs::write(dir.join("levels/annex.gltf"), gltf(&[solid("Floor", [15.0, -0.5, 0.0], [10.0, 1.0, 12.0])])).unwrap();
+    // Two rooms on one floor, the wall between them at x 3 with a doorway 1 m wide whose middle (z 3) is the line
+    // between two columns of the grid: the default body, 0.8 m wide, stands in neither.
+    let rooms = [
+        solid("Floor", [3.0, -0.5, 3.0], [10.0, 1.0, 6.0]),
+        solid("Wall.North", [3.0, 1.25, 1.25], [0.2, 2.5, 2.5]),
+        solid("Wall.South", [3.0, 1.25, 4.75], [0.2, 2.5, 2.5]),
+    ];
+    std::fs::write(dir.join("levels/rooms.gltf"), gltf(&rooms)).unwrap();
     dir
 }
 
@@ -119,12 +133,11 @@ fn a_level_that_asks_has_a_navmesh_that_takes_the_stairs() {
     assert!(nav.report.stitched > 0, "{}", nav.summary());
     assert!(lines(&app, "navmesh: levels tower").len() == 1, "{:#?}", all_journal(&app));
 
-    // From the floor to the walkway over it: round by the stairs (onto which the default body,
-    // which mantles 1.6 m, may climb from the side).
+    // From the floor to the walkway over it: round by the foot of the stairs, every leg a walk.
     let up = route(&app, UNDER, WALKWAY).unwrap_or_else(|e| panic!("up: {e}"));
-    assert!(up.length > 12.0, "round by the stairs, not 3 m straight up: {}", up.to_plan().summary());
-    assert!(up.legs.iter().all(|l| matches!(l.kind, StepKind::Walk | StepKind::Mantle)), "{}", up.to_plan().summary());
-    assert!(up.points.iter().any(|p| p.y > 0.5 && p.y < 2.9), "it climbs: {:?}", up.points);
+    assert!(up.length > 15.0, "round by the stairs, not 3 m straight up: {}", up.to_plan().summary());
+    assert!(up.legs.iter().all(|l| l.kind == StepKind::Walk), "{}", up.to_plan().summary());
+    assert!(up.points.iter().any(|p| p.y < 0.5 && p.z > 2.0 && p.x.abs() < 1.0), "by the foot of the stairs, south of their first step: {:?}", up.points);
     let down = route(&app, WALKWAY, FLOOR).unwrap_or_else(|e| panic!("down: {e}"));
     assert!(down.length > 8.0, "{}", down.to_plan().summary());
 
@@ -190,6 +203,49 @@ fn a_baked_solid_that_goes_bakes_its_chunk_again() {
     assert!(stands(&app), "the floor under the crate is walked");
     let bake = region_nav(app.world()).and_then(|n| n.levels.as_ref()).unwrap().bake;
     assert_eq!((bake.chunks, bake.reused), (4, 3), "only the crate's chunk was baked again");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A goal by a wall has no node in its own column (the baked body has no room there), and the walkway is over it:
+/// its node is the floor beside it, not the walkway's.
+#[test]
+fn a_goal_by_a_wall_under_the_walkway_is_on_the_floor() {
+    let (app, dir) = hall("goal", "tower");
+    // By the wall's west face (x 5.85), under the walkway (z -6..-4).
+    let by_the_wall = Vec3::new(5.6, 0.0, -5.0);
+    let nav = region_nav(app.world()).unwrap();
+    let own: Vec<f32> = nav.nodes_at(nav.column_of(by_the_wall)).map(|n| nav.node_pos(n).y).collect();
+    assert_eq!(own, [3.0], "its own column has the walkway's node only");
+    let walk = route(&app, FLOOR, by_the_wall).unwrap_or_else(|e| panic!("{e}"));
+    assert!(walk.points.iter().all(|p| p.y < 0.5), "it stays on the floor: {:?}", walk.points);
+    assert!(walk.length < 13.0, "{}", walk.to_plan().summary());
+    // On the walkway over that place, the goal is the walkway's.
+    let over = route(&app, FLOOR, by_the_wall + Vec3::Y * 3.0).unwrap_or_else(|e| panic!("{e}"));
+    assert!(over.points.last().is_some_and(|p| p.y > 2.9), "{:?}", over.points);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A doorway that falls between two columns is a gap in the levels' navmesh; the route provider asks the local
+/// grid, centred on the walker, and an NPC walks through.
+#[test]
+fn a_doorway_the_grid_misses_is_walked_on_the_local_grid() {
+    let (mut app, dir) = hall("doorway", "rooms");
+    let (west, east) = (Vec3::new(0.0, 0.0, 3.0), Vec3::new(6.0, 0.0, 3.0));
+    let gap = route(&app, west, east).unwrap_err();
+    assert!(gap.contains("cannot reach"), "the navmesh has no way through: {gap}");
+    let body = CharacterParams::default();
+    let way = find_path(app.world(), west, east, &body).expect("the local grid's way through the doorway");
+    assert!(way.iter().all(|p| (p.z - 3.0).abs() < 0.6), "straight through: {way:?}");
+    // And an NPC goes through it to a player on the other side.
+    let hero = player(app.world_mut(), 0, east);
+    let grunt = grunt(app.world_mut(), "grunt", "grunt", "default", west);
+    for _ in 0..600 {
+        step(&mut app, 1);
+        if flat_distance(feet(&app, grunt), feet(&app, hero)) < 2.5 {
+            break;
+        }
+    }
+    assert!(feet(&app, grunt).x > 3.3, "it came through the doorway: {:?} ({})", feet(&app, grunt), state(&app, grunt));
     let _ = std::fs::remove_dir_all(dir);
 }
 

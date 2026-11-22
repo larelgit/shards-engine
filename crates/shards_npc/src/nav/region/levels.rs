@@ -279,6 +279,10 @@ fn sharing(world: &World) -> bool {
 /// none, and NPCs plan on the local grid. `rebuild` calls it where no region is loaded, with the
 /// old navmesh taken away already.
 pub(super) fn rebuild(world: &mut World) {
+    // It builds a part of the simulation's world, whoever asked first (a tick, a tool that only
+    // looks, a snapshot being loaded): what it reads of content is the simulation's, so a replay
+    // names the same definitions however its navmesh came to be built.
+    let _sim = ai_core::scope::open(world);
     world.remove_resource::<NoLevelNav>();
     let none = |world: &mut World| {
         let none = NoLevelNav { placed: placed(world).to_vec(), content: content_changed(world), simulating: super::super::simulates(world) };
