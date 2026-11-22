@@ -215,9 +215,45 @@ fn volumes_are_sensors_shaped_by_the_mesh() {
 }
 
 #[test]
+fn a_ladder_is_a_volume_with_the_face_it_is_climbed_from() {
+    let mut app = app();
+    let mut g = Gltf::new();
+    let cube = g.cube();
+    // 0.3 m thick against a wall at x = 0, 0.8 m wide, from the floor to 3.5 m; climbed from +X.
+    g.root(NodeSpec::new("Ladder").at([0.15, 1.75, 0.0]).scale([0.3, 3.5, 0.8]).mesh(cube).props(json!({"volume": "ladder", "face": [2, 0, 0]})));
+    // The same ladder on a node turned a quarter: the face is the node's own, and turns with it.
+    g.root(NodeSpec::new("Turned").at([8.0, 1.75, 0.0]).yaw(90.0).scale([0.3, 3.5, 0.8]).mesh(cube).props(json!({"volume": "ladder", "face": [1, 0, 0]})));
+    spawn(&mut app, &g).unwrap();
+    let nodes = by_node(&mut app);
+    let w = app.world();
+    for path in ["Ladder", "Turned"] {
+        assert_eq!(w.get::<Volume>(nodes[path]).map(|v| v.kind.clone()), Some(VolumeKind::Ladder { face: Vec3::X }), "{path}: kept at length 1");
+        assert_eq!(w.get::<Collider>(nodes[path]).unwrap().layers, CollisionLayers::VOLUME, "{path}");
+        // The box is the node's own, whatever way it is turned (a turned node's scale comes back through its matrix).
+        let Shape::Cuboid { half } = w.get::<Collider>(nodes[path]).unwrap().shape else { panic!("{path}: not a box") };
+        assert!((half - Vec3::new(0.15, 1.75, 0.4)).length() < 1e-5, "{path}: {half}");
+    }
+    let turned = w.get::<Transform>(nodes["Turned"]).unwrap().rotation * Vec3::X;
+    assert!((turned - Vec3::NEG_Z).length() < 1e-5, "a quarter turn about Y faces the ladder to -Z: {turned}");
+    assert_eq!(VolumeKind::Ladder { face: Vec3::X }.to_string(), "ladder");
+
+    app.update();
+    let physics = app.world().resource::<PhysicsWorld>();
+    let at = |p: Vec3| physics.volumes_at(p, None).into_iter().map(|(_, k)| k).collect::<Vec<_>>();
+    assert_eq!(at(Vec3::new(0.2, 3.0, 0.0)), [VolumeKind::Ladder { face: Vec3::X }]);
+    // It is a sensor: nothing solid stands there.
+    assert!(physics.raycast(Vec3::new(3.0, 1.0, 0.0), Dir3::NEG_X, 6.0, &QueryFilter::default()).is_none());
+}
+
+#[test]
 fn volumes_say_what_is_missing() {
     let mut app = app();
     for (props, needle) in [
+        (json!({"volume": "ladder"}), "a ladder needs `face`: `[x, y, z]`, the way out of the ladder toward the side it is climbed from"),
+        (json!({"volume": "ladder", "face": [0, 1, 0]}), "`face` must point sideways out of the ladder"),
+        (json!({"volume": "ladder", "face": "east"}), "`face` must be [x, y, z], found"),
+        (json!({"volume": "water", "face": [1, 0, 0]}), "`face` does nothing on this node: it is the side a ladder volume is climbed from"),
+        (json!({"volume": "lader", "face": [1, 0, 0]}), "unknown volume `lader` (did you mean `ladder`?); volumes: water, updraft, ladder, trigger"),
         (json!({"volume": "updraft"}), "an updraft needs `accel` (m/s²) and `max_speed` (m/s), both above zero"),
         (json!({"volume": "updraft", "accel": 5}), "an updraft needs `accel`"),
         (json!({"volume": "updraft", "accel": 5, "max_speed": 0}), "`max_speed` must be above zero"),

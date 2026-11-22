@@ -66,6 +66,19 @@ git push origin v0.1.0
 Changes that land in the main branch after phases C–E (`0.4.0`) go here.
 
 ### Added
+- Ladders (the manual's "Ladders"). A new volume kind, `VolumeKind::Ladder { face }`: in a level file a node with
+  `"volume": "ladder"` and `"face": [x, y, z]` (the way out of the ladder, toward the side it is climbed from, in the node's
+  space), shaped by its collider like `water` and `updraft`. A body whose `locomotion` gives a `ladder_speed` (new, default 0:
+  the body does not climb, so no NPC does unless its definition says) takes hold of it when it pushes into it against
+  something solid, on the ground, in a fall or swimming, and when it walks off an edge inside the volume (the way down from
+  the top); it climbs with no gravity (into the ladder is up, away is down, the rest is sideways, no input hangs), walks off
+  onto the floor at the top, stands on the ground at the foot, and a jump lets go with a push of `ladder_jump_speed` (new,
+  default 2.5 m/s). `ladder_by_look` (new, default off) is *Half-Life*'s rule: the forward input goes along the look's pitch.
+  The body's state is the new `MotionMode::Ladder` (and `ModeChanged`); its velocity is the climb's. Animation sets get the
+  mode name `ladder` and the locomotion state `ladder`; the describer shows `ladder ↑3.5m/s`; `physics_overlay` draws the
+  volume orange. Driven by the existing `Intent` only; no component, resource or field of `MotionState` was added, so a body
+  that does not climb moves and hashes as it did, and the three options are left out of the written form at their defaults.
+  The navmesh leaves the volume out as it does every sensor.
 - A navmesh for hand-made levels (the manual's "The navmesh of hand-made levels"). A `level` definition takes `nav: true`
   (`LevelDef::nav`). While no region is loaded, the levels placed by id that say so are baked in memory as they are placed,
   from their own static solids, in chunks of 32 columns (`LEVEL_CHUNK`) on a world-aligned grid, once per body class of the

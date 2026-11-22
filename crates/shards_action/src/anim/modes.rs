@@ -57,6 +57,7 @@ fn the_modes_have_content_names() {
         (MotionMode::Water, "water"),
         (MotionMode::Glide, "glide"),
         (MotionMode::Mantle, "mantle"),
+        (MotionMode::Ladder, "ladder"),
     ] {
         assert_eq!(mode_name(mode), name);
         assert_eq!(parse_mode(name), Some(mode));
@@ -76,8 +77,8 @@ fn a_mode_key_is_checked() {
     assert_eq!(
         errors,
         [
-            "content/h.animset.ron: animset `h`: mounts.@left:space names an unknown motion mode `space`; modes: ground, air, water, glide, mantle",
-            "content/h.animset.ron: animset `h`: mounts.@mode:watr names an unknown motion mode `watr` (did you mean `water`?); modes: ground, air, water, glide, mantle",
+            "content/h.animset.ron: animset `h`: mounts.@left:space names an unknown motion mode `space`; modes: ground, air, water, glide, mantle, ladder",
+            "content/h.animset.ron: animset `h`: mounts.@mode:watr names an unknown motion mode `watr` (did you mean `water`?); modes: ground, air, water, glide, mantle, ladder",
         ]
     );
     // The fields belong to their key; the numbers are not negative; a span has no phases.
@@ -115,10 +116,10 @@ fn drops_and_off_in_are_checked() {
     assert_eq!(
         errors_of(PROPS, &bad),
         [
-            "content/h.animset.ron: animset `h`: layers.upper.off_in names an unknown motion mode `sea`; modes: ground, air, water, glide, mantle",
+            "content/h.animset.ron: animset `h`: layers.upper.off_in names an unknown motion mode `sea`; modes: ground, air, water, glide, mantle, ladder",
             "content/h.animset.ron: animset `h`: drops.air.down must be > 0 (is 0)",
             "content/h.animset.ron: animset `h`: drops.air.seconds must be > 0 (is -1)",
-            "content/h.animset.ron: animset `h`: drops has an unknown motion mode `watr` (did you mean `water`?); modes: ground, air, water, glide, mantle",
+            "content/h.animset.ron: animset `h`: drops has an unknown motion mode `watr` (did you mean `water`?); modes: ground, air, water, glide, mantle, ladder",
         ]
     );
     let bare = text.replace(r#" root_motion: "root","#, "");

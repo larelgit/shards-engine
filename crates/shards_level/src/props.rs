@@ -31,7 +31,7 @@ use crate::asset::{json_kind, LevelAsset, LevelNode};
 use crate::marker::{MarkerKind, RequiredMarker};
 
 /// The level properties, in documentation order.
-pub const PROPERTIES: [&str; 21] = [
+pub const PROPERTIES: [&str; 22] = [
     "marker",
     "name",
     "socket",
@@ -46,6 +46,7 @@ pub const PROPERTIES: [&str; 21] = [
     "volume",
     "accel",
     "max_speed",
+    "face",
     "prefab",
     "mover",
     "light",
@@ -411,10 +412,11 @@ pub(crate) fn plan_node(node: &LevelNode, position: usize, registry: &TypeRegist
         (Some(word), Some(_)) => Some(Err(format!("`marker` is `trigger`, so the volume is a trigger, but `volume` says `{word}`"))),
         (Some("water"), None) => Some(Ok(VolumeKind::Water)),
         (Some("updraft"), None) => Some(read_updraft(props, &mut used)),
+        (Some("ladder"), None) => Some(read_ladder(props, &mut used)),
         (Some(other), None) => {
-            let volumes = ["water", "updraft", "trigger"];
+            let volumes = ["water", "updraft", "ladder", "trigger"];
             let hint = closest(other, volumes.into_iter()).map(|c| format!(" (did you mean `{c}`?)")).unwrap_or_default();
-            Some(Err(format!("unknown volume `{other}`{hint}; volumes: water, updraft, trigger")))
+            Some(Err(format!("unknown volume `{other}`{hint}; volumes: water, updraft, ladder, trigger")))
         }
     };
     match volume {
@@ -538,6 +540,7 @@ fn why_unused(key: &str) -> &'static str {
         "to" => "it is where a navlink ends, and the node is no navlink",
         "size" | "radius" | "height" | "offset" | "layers" | "collides_with" => "it shapes a collider, and the node has no `collider` or `volume`",
         "accel" | "max_speed" => "they belong to an updraft volume",
+        "face" => "it is the side a ladder volume is climbed from, and the node is no ladder",
         "hold_s" | "use_range" | "prompt" => "it says how an `interactable` is used, and the node is no interactable marker",
         _ => "check the spelling of the property",
     }
@@ -552,6 +555,20 @@ fn read_updraft(props: &Map<String, Value>, used: &mut Vec<&'static str>) -> Res
     match (positive(props, "accel")?, positive(props, "max_speed")?) {
         (Some(accel), Some(max_speed)) => Ok(VolumeKind::Updraft { accel, max_speed }),
         _ => Err("an updraft needs `accel` (m/s²) and `max_speed` (m/s), both above zero".into()),
+    }
+}
+
+/// A ladder's `face`: the way out of the ladder, toward the side it is climbed from, in the node's space.
+/// Kept at length 1; the controller uses its level part once the node's rotation has turned it.
+fn read_ladder(props: &Map<String, Value>, used: &mut Vec<&'static str>) -> Result<VolumeKind, String> {
+    used.push("face");
+    const NEEDS: &str = "a ladder needs `face`: `[x, y, z]`, the way out of the ladder toward the side it is climbed from (away \
+                         from the wall it hangs on), in the node's space, +Y up";
+    // A direction, not a length: the vector reader's unit does not belong in its message.
+    match vector(props, "face", false).map_err(|e| e.replace(" (meters)", ""))? {
+        Some(face) if Vec3::new(face.x, 0.0, face.z).length_squared() > 1e-6 => Ok(VolumeKind::Ladder { face: face.normalize() }),
+        Some(face) => Err(format!("`face` must point sideways out of the ladder, found {face:?}: a ladder is climbed from one of its sides, not from above or below")),
+        None => Err(NEEDS.into()),
     }
 }
 

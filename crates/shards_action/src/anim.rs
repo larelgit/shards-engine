@@ -182,7 +182,7 @@
 //! ## Motion modes
 //!
 //! What a body shows can depend on the motion mode it is drawn in (`MotionState::mode`: `ground`,
-//! `air`, `water`, `glide`, `mantle`; [`MODES`]). `mounts["@mode:water"]` holds the rules while the
+//! `air`, `water`, `glide`, `mantle`, `ladder`; [`MODES`]). `mounts["@mode:water"]` holds the rules while the
 //! body swims (`yield_after`: they step aside while an action runs in the mode and for that many
 //! seconds after it, a blade swung afloat stays in the hand); `mounts["@left:water"]` holds the rules
 //! after the body left it (`wait`: the moves are read at time 0 for up to that many seconds, or until
@@ -402,8 +402,8 @@ impl LayerDef {
     }
 }
 
-/// The name content gives a motion mode: `ground`, `air`, `water`, `glide`, `mantle`.
-pub const MODES: [&str; 5] = ["ground", "air", "water", "glide", "mantle"];
+/// The name content gives a motion mode: `ground`, `air`, `water`, `glide`, `mantle`, `ladder`.
+pub const MODES: [&str; 6] = ["ground", "air", "water", "glide", "mantle", "ladder"];
 
 /// The content name of `mode` (see [`MODES`]).
 pub fn mode_name(mode: MotionMode) -> &'static str {
@@ -413,12 +413,13 @@ pub fn mode_name(mode: MotionMode) -> &'static str {
         MotionMode::Water => "water",
         MotionMode::Glide => "glide",
         MotionMode::Mantle => "mantle",
+        MotionMode::Ladder => "ladder",
     }
 }
 
 /// The motion mode content calls `name`.
 pub fn parse_mode(name: &str) -> Option<MotionMode> {
-    [MotionMode::Ground, MotionMode::Air, MotionMode::Water, MotionMode::Glide, MotionMode::Mantle]
+    [MotionMode::Ground, MotionMode::Air, MotionMode::Water, MotionMode::Glide, MotionMode::Mantle, MotionMode::Ladder]
         .into_iter()
         .find(|m| mode_name(*m) == name)
 }
@@ -833,13 +834,15 @@ pub enum Locomotion {
     Glide,
     /// Climbing onto a ledge.
     Mantle,
+    /// On a ladder, climbing or hanging.
+    Ladder,
     /// Reeling from a hit (the moveset's `stagger` action).
     Stagger,
     Dead,
 }
 
 impl Locomotion {
-    pub const ALL: [Locomotion; 10] = [
+    pub const ALL: [Locomotion; 11] = [
         Locomotion::Idle,
         Locomotion::Walk,
         Locomotion::Run,
@@ -848,6 +851,7 @@ impl Locomotion {
         Locomotion::Swim,
         Locomotion::Glide,
         Locomotion::Mantle,
+        Locomotion::Ladder,
         Locomotion::Stagger,
         Locomotion::Dead,
     ];
@@ -863,6 +867,7 @@ impl Locomotion {
             Locomotion::Swim => "swim",
             Locomotion::Glide => "glide",
             Locomotion::Mantle => "mantle",
+            Locomotion::Ladder => "ladder",
             Locomotion::Stagger => "stagger",
             Locomotion::Dead => "dead",
         }
@@ -884,6 +889,7 @@ impl Locomotion {
             Swim => &[Walk, Idle],
             Glide => &[Air, Idle],
             Mantle => &[Air, Idle],
+            Ladder => &[Idle],
         }
     }
 
@@ -1449,6 +1455,7 @@ pub fn locomotion_state_at(motion: &MotionState, speeds: &GroundSpeeds, pace: f3
         MotionMode::Water => Locomotion::Swim,
         MotionMode::Glide => Locomotion::Glide,
         MotionMode::Mantle => Locomotion::Mantle,
+        MotionMode::Ladder => Locomotion::Ladder,
         MotionMode::Air => Locomotion::Air,
         MotionMode::Ground => {
             let v = Vec2::new(motion.velocity.x, motion.velocity.z).length();
@@ -3224,7 +3231,7 @@ mod tests {
             [
                 format!(
                     "{h}locomotion has an unknown state `walk.bak` (did you mean `walk.back`?); states: idle, walk, run, sprint, \
-                     air, swim, glide, mantle, stagger, dead; facing a target: a gait's heading (`walk.back`, `run.left`, \
+                     air, swim, glide, mantle, ladder, stagger, dead; facing a target: a gait's heading (`walk.back`, `run.left`, \
                      `sprint.right`) or `idle.facing`"
                 ),
                 needs_root("actions.dodge"),
@@ -3496,7 +3503,7 @@ mod tests {
             "content/h.animset.ron: animset `bad`: clips.walk.blend must be >= 0 (is -1)",
             "content/h.animset.ron: animset `bad`: clips.walk.cues[0].at must be >= 0 (is -1)",
             "content/h.animset.ron: animset `bad`: clips.walk.cues[0].cue has no name",
-            "content/h.animset.ron: animset `bad`: locomotion has an unknown state `idel` (did you mean `idle`?); states: idle, walk, run, sprint, air, swim, glide, mantle, stagger, dead; facing a target: a gait's heading (`walk.back`, `run.left`, `sprint.right`) or `idle.facing`",
+            "content/h.animset.ron: animset `bad`: locomotion has an unknown state `idel` (did you mean `idle`?); states: idle, walk, run, sprint, air, swim, glide, mantle, ladder, stagger, dead; facing a target: a gait's heading (`walk.back`, `run.left`, `sprint.right`) or `idle.facing`",
             "content/h.animset.ron: animset `bad`: locomotion.walk -> unknown clip `wlak` (did you mean `walk`?); clips: idle, walk",
             "content/h.animset.ron: animset `bad`: actions -> unknown action `light_2` (did you mean `light_1`?)",
             "content/h.animset.ron: animset `bad`: actions.roll -> unknown clip `dance`; clips: idle, walk",

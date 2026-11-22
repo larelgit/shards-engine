@@ -1,10 +1,10 @@
 //! # shards_motion — physics, character, input, camera
 //!
 //! - [`physics`]: colliders with deterministic ids, collision layers, sensor volumes
-//!   (water, updrafts, triggers) and queries (`raycast`, `shapecast`, `overlaps`,
+//!   (water, updrafts, ladders, triggers) and queries (`raycast`, `shapecast`, `overlaps`,
 //!   `volumes_at`) on [`PhysicsWorld`], usable from systems and from `&World` (AI tools).
 //! - [`controller`]: the kinematic character controller — walk, run, sprint, slopes,
-//!   stairs, jump, mantle, swim, glide — driven by [`LocomotionInput`]. Its numbers are
+//!   stairs, jump, mantle, swim, glide, ladders — driven by [`LocomotionInput`]. Its numbers are
 //!   content (`locomotion`, hot-reloadable).
 //! - [`intent`](MotionSystems): `Intent` → [`LocomotionInput`], the one way characters are
 //!   steered.

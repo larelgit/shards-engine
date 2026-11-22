@@ -138,7 +138,7 @@ impl LayerMask {
     pub const HURTBOX: Self = Self(1 << 2);
     /// What hits: weapon swings, explosions.
     pub const HITBOX: Self = Self(1 << 3);
-    /// Sensors: water, updrafts, triggers.
+    /// Sensors: water, updrafts, triggers, ladders.
     pub const VOLUME: Self = Self(1 << 4);
     pub const PROJECTILE: Self = Self(1 << 5);
     /// What a character can use by looking at it (F5): the use areas of interactable things. A query
@@ -315,6 +315,13 @@ pub enum VolumeKind {
     Updraft { accel: f32, max_speed: f32 },
     /// A named zone for game logic: goal pads, region borders, cutscene starts.
     Trigger { name: String },
+    /// A ladder: a character whose `locomotion` gives a `ladder_speed` climbs it (the controller's
+    /// [`MotionMode::Ladder`](crate::MotionMode::Ladder)). The volume is the space the ladder takes,
+    /// about as thin as the ladder and standing in front of what it hangs on, from its foot to about
+    /// half a metre over the floor it leads to. `face` points out of the ladder, toward the side it is
+    /// climbed from (away from the wall), in the volume entity's own frame; only its horizontal part
+    /// counts once the entity's rotation has turned it.
+    Ladder { face: Vec3 },
 }
 
 impl fmt::Display for VolumeKind {
@@ -323,6 +330,7 @@ impl fmt::Display for VolumeKind {
             VolumeKind::Water => f.write_str("water"),
             VolumeKind::Updraft { .. } => f.write_str("updraft"),
             VolumeKind::Trigger { name } => write!(f, "trigger \"{name}\""),
+            VolumeKind::Ladder { .. } => f.write_str("ladder"),
         }
     }
 }

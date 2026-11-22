@@ -13,7 +13,9 @@
 //! `max_slope_deg`, steps onto obstacles up to `step_height` and snaps down stairs;
 //! **Air** falls with gravity and some air control; **Glide** falls slowly and rides
 //! updrafts; **Water** floats at the surface; **Mantle** climbs onto a ledge along a
-//! path checked before it starts. Characters never collide with each other through
+//! path checked before it starts; **Ladder** holds a body whose params give a `ladder_speed`
+//! on a ladder volume, with no gravity, and climbs by its movement input (`locomotion.rs`,
+//! "ladder"). Characters never collide with each other through
 //! casts: after all of them moved, a separation pass pushes overlapping capsules apart.
 //!
 //! The transform's translation is the character's feet. Writing it from outside (the
@@ -124,7 +126,7 @@ pub struct LocomotionInput {
     /// World-space displacement an action asks for this tick (a dodge roll, a lunge).
     pub external: Vec3,
     /// An action owns the body: no walking, jumping, gliding or climbing; only
-    /// `external` and gravity move it.
+    /// `external` and gravity move it (a body on a ladder keeps its hold, and hangs).
     pub locked: bool,
 }
 
@@ -136,6 +138,10 @@ pub enum MotionMode {
     Water,
     Glide,
     Mantle,
+    /// On a ladder ([`VolumeKind::Ladder`](crate::VolumeKind::Ladder)): held by it, with no gravity, and
+    /// climbing by the movement input at the params' `ladder_speed`. Only a body whose params give that
+    /// speed is ever in it. [`MotionState::velocity`] is the climb's: its `y` is the speed up or down.
+    Ladder,
 }
 
 /// A climb onto a ledge: straight up from `from` to `corner`, then over to `to`.
@@ -465,6 +471,7 @@ pub fn move_characters<F: QueryFilter + 'static>(
             jumped_flight: flight,
             launch: launch.map(|l| l.height),
             crouched: depth > 0.0,
+            look: intent.and_then(|intent| params.bound_look(intent)),
             notes: Vec::new(),
         };
         let feet = step.run(tf.translation);
@@ -521,8 +528,8 @@ fn sanitized(input: &LocomotionInput) -> LocomotionInput {
 fn trigger(commands: &mut Commands, entity: Entity, note: Note, tracks: bool) {
     match note {
         Note::Mode(from, to) => {
-            // Ground, water and a ledge end the flight, whether or not a landing was reported.
-            if tracks && matches!(to, MotionMode::Ground | MotionMode::Water | MotionMode::Mantle) {
+            // Ground, water, a ledge and a ladder end the flight, whether or not a landing was reported.
+            if tracks && matches!(to, MotionMode::Ground | MotionMode::Water | MotionMode::Mantle | MotionMode::Ladder) {
                 commands.entity(entity).try_remove::<JumpedFlight>();
             }
             commands.trigger(ModeChanged { entity, from, to })

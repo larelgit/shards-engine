@@ -265,6 +265,7 @@ fn jump(
     let message = match state.mode {
         MotionMode::Mantle => return Err("cannot jump while climbing; it ends in a moment, then jump".into()),
         MotionMode::Glide => return Err("cannot jump while gliding; `glide on=false` first, or wait to land".into()),
+        MotionMode::Ladder => "ok: jumping off the ladder".into(),
         MotionMode::Water => {
             // The controller climbs out when a ledge is within reach in front of the swimmer.
             let forward = tf.forward();
@@ -418,6 +419,7 @@ fn glide(In(call): In<Call<GlideArgs>>, mut commands: Commands, db: Option<Res<C
     let message = match state.mode {
         MotionMode::Water => return Err("cannot glide in water; swim out first".into()),
         MotionMode::Mantle => return Err("cannot glide while climbing; wait until you stand".into()),
+        MotionMode::Ladder => return Err("cannot glide on a ladder; `jump` off it first".into()),
         MotionMode::Glide => "ok: gliding (ends when you land; stop with on=false)",
         MotionMode::Air if state.velocity.y >= 0.0 => "ok: glide set; it opens once you start to fall",
         MotionMode::Air => "ok: gliding (ends when you land; stop with on=false)",
