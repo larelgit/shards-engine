@@ -674,6 +674,7 @@ fn mode_name(mode: MotionMode) -> &'static str {
         MotionMode::Water => "water",
         MotionMode::Glide => "a glide",
         MotionMode::Mantle => "a climb",
+        MotionMode::Ladder => "a climb on a ladder",
     }
 }
 

@@ -319,6 +319,23 @@ pub struct CharacterParams {
     /// between the two heights at an even rate. 0: at once.
     #[serde(skip_serializing_if = "is_zero")]
     pub crouch_time: f32,
+    /// How fast the body climbs a ladder (m/s; a [`VolumeKind::Ladder`](crate::VolumeKind::Ladder) volume):
+    /// up while it pushes into the ladder, down while it pushes away from it, sideways along it. 0 (the
+    /// default): the body does not climb, and a ladder volume is nothing to it, so an NPC climbs only when
+    /// its `locomotion` says so.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub ladder_speed: f32,
+    /// How fast a jump pushes the body off a ladder (m/s, level, out of the ladder's face). 0: the jump
+    /// only lets go. The default is 2.5. Whatever the speed, the body takes hold of no ladder while it goes
+    /// on pushing into the one it jumped off ([`LadderLetGo`](super::LadderLetGo)).
+    #[serde(skip_serializing_if = "ladder_jump_is_default")]
+    pub ladder_jump_speed: f32,
+    /// *Half-Life*'s rule for a body that faces its look (`face: Look`): on a ladder the forward input
+    /// goes along the look's pitch, so looking up and pressing forward climbs, looking down and pressing
+    /// forward goes down, and at 45 degrees up the climb is about 1.4 times `ladder_speed`. `false` (the
+    /// default): the pitch does not count, pushing into the ladder climbs and pushing away goes down.
+    #[serde(skip_serializing_if = "is_false")]
+    pub ladder_by_look: bool,
     /// How the ground and the air steer the body (F7): `Step` (the default: the velocity steps toward the target at
     /// `acceleration`, `deceleration` and `air_control`) or `Projected(..)` (ground friction and a push along the wished
     /// direction limited by the speed already projected on it, as in *Quake* and *Half-Life*: strafing and air turns).
@@ -331,6 +348,9 @@ pub struct CharacterParams {
 /// The pitch limits a body has unless its `locomotion` says (degrees): just short of straight up
 /// and down, where the yaw means nothing.
 pub const DEFAULT_PITCH_LIMITS_DEG: (f32, f32) = (-89.0, 89.0);
+
+/// How fast a jump pushes a body off a ladder unless its `locomotion` says (m/s).
+pub const DEFAULT_LADDER_JUMP_SPEED: f32 = 2.5;
 
 /// The eye of a body without an `eye_height`, as a fraction of its height.
 pub const DEFAULT_EYE_FRACTION: f32 = 0.9;
@@ -403,6 +423,9 @@ impl Default for CharacterParams {
             crouch_height: None,
             crouch_speed: None,
             crouch_time: 0.0,
+            ladder_speed: 0.0,
+            ladder_jump_speed: DEFAULT_LADDER_JUMP_SPEED,
+            ladder_by_look: false,
             accel: AccelModel::Step,
         }
     }
@@ -444,6 +467,10 @@ fn pitch_limits_are_default(v: &(f32, f32)) -> bool {
 
 fn use_range_is_default(v: &f32) -> bool {
     *v == DEFAULT_USE_RANGE
+}
+
+fn ladder_jump_is_default(v: &f32) -> bool {
+    *v == DEFAULT_LADDER_JUMP_SPEED
 }
 
 /// What a character without content moves by: the code defaults.
@@ -575,6 +602,11 @@ impl CharacterParams {
         self.eye_height.unwrap_or(DEFAULT_EYE_FRACTION * self.height)
     }
 
+    /// Whether the body climbs ladders: its `locomotion` gives a [`ladder_speed`](Self::ladder_speed).
+    pub fn can_climb_ladders(&self) -> bool {
+        self.ladder_speed > 0.0
+    }
+
     /// Whether the body can crouch: its `locomotion` gives a [`crouch_height`](Self::crouch_height).
     pub fn can_crouch(&self) -> bool {
         self.crouch_height.is_some()
@@ -691,6 +723,8 @@ impl CharacterParams {
             ("wade_factor", self.wade_factor),
             ("wade_depth_offset", self.wade_depth_offset),
             ("air_deceleration", self.air_deceleration),
+            ("ladder_speed", self.ladder_speed),
+            ("ladder_jump_speed", self.ladder_jump_speed),
         ];
         for (name, v) in non_negative {
             if !(v >= 0.0 && v.is_finite()) {

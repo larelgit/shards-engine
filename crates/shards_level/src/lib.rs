@@ -55,8 +55,9 @@
 //! | `offset` | `[x, y, z]` | the collider's center in the node's space; the middle of the mesh bounds when left out |
 //! | `layers` | `world`, `character`, `volume`, `use`, `game0`..`game15`, ... (a name or a list) | what the collider is; solids default to `world`, volumes to `volume` |
 //! | `collides_with` | the same names | what it reacts to (solids: everything, volumes: characters) |
-//! | `volume` | `water`, `updraft`, `trigger` | a sensor [`Volume`](shards_motion::Volume), shaped by `collider` (default `auto`) |
+//! | `volume` | `water`, `updraft`, `ladder`, `trigger` | a sensor [`Volume`](shards_motion::Volume), shaped by `collider` (default `auto`) |
 //! | `accel`, `max_speed` | numbers | an updraft's pull (m/s²) and top speed (m/s) |
+//! | `face` | `[x, y, z]` | a ladder's open side: the way out of the ladder toward the side it is climbed from (away from the wall it hangs on), in the node's space (+Y up, as the file has it: Blender's `(x, y, z)` is `(x, z, -y)`); it must have a level part |
 //! | `prefab` | text | spawn the content prefab with that id at the node; component properties patch it |
 //! | `hold_s`, `use_range`, `prompt` | seconds (zero or more), metres (above zero, at most 100), text | for an `interactable` (F5): the seconds the button is held for a use (0 is a press), how far from the eye it can be used (the body's own reach when left out), and what a HUD shows (a Fluent `@id` or text; the name when left out) |
 //! | `mover` | text | the node becomes a [`Mover`](shards_motion::Mover) going through the keys of that `mover` definition (F6); the nodes below it move with it as its [`MoverPart`](shards_motion::MoverPart)s, and its picture follows it; movers do not nest |

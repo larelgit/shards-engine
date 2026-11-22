@@ -168,6 +168,8 @@ fn dress(
             // Drawn as a wireframe (`draw_updrafts`): a glider inside one sees through.
             (Some(VolumeKind::Updraft { .. }), _) => continue,
             (Some(VolumeKind::Trigger { .. }), _) => e.with_child((cube, MeshMaterial3d(palette.goal.clone()))),
+            // The space a ladder takes, not a thing to look at: the level's own model is the ladder.
+            (Some(VolumeKind::Ladder { .. }), _) => continue,
             (None, Some(PieceKind::Solid(surface))) => e.with_child((cube, base(), Look::new(surface.look()))),
             _ if looked => e.with_child((cube, base())),
             _ => e.with_child((cube, base(), Look::new("stone"))),

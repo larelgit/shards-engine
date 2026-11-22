@@ -14,6 +14,9 @@ const MAX_SLIDES: usize = 4;
 const TINY: f32 = 1e-5;
 /// How far past an edge contact the surface probe looks (m).
 const EDGE_PROBE: f32 = 0.02;
+/// The floor under the feet is looked for from this far above them (m): a ray that starts on a surface
+/// misses it.
+const FLOOR_RAY_LIFT: f32 = 0.05;
 /// A ledge probe needs at least this much room on top (m).
 const MIN_LEDGE_ROOM: f32 = 0.1;
 /// The nearest the capsule may sit to anything, in skins, before it is pushed back out
@@ -328,6 +331,29 @@ impl<'a> Mover<'a> {
         out
     }
 
+    /// The ladder the capsule at `feet` touches: of several, the first in id order the body is in
+    /// front of, else the first.
+    pub fn ladder(&self, feet: Vec3) -> Option<Ladder> {
+        let pose = self.pose(feet);
+        let center = feet + Vec3::Y * self.center;
+        let mut first = None;
+        for face in self.physics.ladders_touching(&self.geom, &pose) {
+            let ladder = Ladder { out: face.out, front: (center - face.center).dot(face.out) > 0.0 };
+            if ladder.front {
+                return Some(ladder);
+            }
+            first.get_or_insert(ladder);
+        }
+        first
+    }
+
+    /// Whether the capsule's axis stands over walkable ground no more than `max` below the feet: a
+    /// ray, so an edge beside the feet that the round bottom would rest on does not count.
+    pub fn floor_under(&self, feet: Vec3, max: f32) -> bool {
+        let origin = feet + Vec3::Y * FLOOR_RAY_LIFT;
+        self.physics.raycast(origin, Dir3::NEG_Y, max + FLOOR_RAY_LIFT, &self.filter).is_some_and(|hit| self.walkable(hit.normal))
+    }
+
     /// Surface of the water the feet are in (the highest one).
     pub fn water(&self, feet: Vec3) -> Option<f32> {
         self.physics.water_surface_at(feet + Vec3::Y * 0.05)
@@ -344,6 +370,15 @@ impl<'a> Mover<'a> {
             None => max.max(below),
         }
     }
+}
+
+/// A ladder as the body touching it meets it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Ladder {
+    /// Out of the ladder, toward the side it is climbed from: level, of length 1.
+    pub out: Vec3,
+    /// The body's middle is on that side of the ladder's own middle: it can take hold of it.
+    pub front: bool,
 }
 
 /// What volumes say about a position.

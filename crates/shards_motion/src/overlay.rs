@@ -36,7 +36,7 @@ pub(crate) fn plugin(app: &mut App) {
 }
 
 /// Draw every collider and sensor volume in the game window: world geometry grey, character
-/// bodies green, hit and hurt boxes red, water blue, updrafts cyan, triggers yellow.
+/// bodies green, hit and hurt boxes red, water blue, updrafts cyan, triggers yellow, ladders orange.
 #[derive(Deserialize, JsonSchema)]
 pub struct OverlayArgs {
     /// Default true.
@@ -53,6 +53,7 @@ fn color_of(c: &ColliderInfo) -> Color {
         Some(VolumeKind::Water) => Color::srgb(0.2, 0.5, 1.0),
         Some(VolumeKind::Updraft { .. }) => Color::srgb(0.2, 0.9, 0.9),
         Some(VolumeKind::Trigger { .. }) => Color::srgb(1.0, 0.9, 0.2),
+        Some(VolumeKind::Ladder { .. }) => Color::srgb(1.0, 0.55, 0.15),
         None if c.layers.memberships.intersects(LayerMask::HITBOX | LayerMask::HURTBOX) => Color::srgb(1.0, 0.3, 0.25),
         None if c.layers.memberships.intersects(LayerMask::CHARACTER) => Color::srgb(0.3, 1.0, 0.4),
         None => Color::srgb(0.6, 0.65, 0.75),

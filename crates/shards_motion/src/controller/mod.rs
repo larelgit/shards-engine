@@ -13,7 +13,9 @@
 //! `max_slope_deg`, steps onto obstacles up to `step_height` and snaps down stairs;
 //! **Air** falls with gravity and some air control; **Glide** falls slowly and rides
 //! updrafts; **Water** floats at the surface; **Mantle** climbs onto a ledge along a
-//! path checked before it starts. Characters never collide with each other through
+//! path checked before it starts; **Ladder** holds a body whose params give a `ladder_speed`
+//! on a ladder volume, with no gravity, and climbs by its movement input (`locomotion.rs`,
+//! "ladder"; a jump lets go, [`LadderLetGo`]). Characters never collide with each other through
 //! casts: after all of them moved, a separation pass pushes overlapping capsules apart.
 //!
 //! The transform's translation is the character's feet. Writing it from outside (the
@@ -124,7 +126,7 @@ pub struct LocomotionInput {
     /// World-space displacement an action asks for this tick (a dodge roll, a lunge).
     pub external: Vec3,
     /// An action owns the body: no walking, jumping, gliding or climbing; only
-    /// `external` and gravity move it.
+    /// `external` and gravity move it (a body on a ladder keeps its hold, and hangs).
     pub locked: bool,
 }
 
@@ -136,6 +138,10 @@ pub enum MotionMode {
     Water,
     Glide,
     Mantle,
+    /// On a ladder ([`VolumeKind::Ladder`](crate::VolumeKind::Ladder)): held by it, with no gravity, and
+    /// climbing by the movement input at the params' `ladder_speed`. Only a body whose params give that
+    /// speed is ever in it. [`MotionState::velocity`] is the climb's: its `y` is the speed up or down.
+    Ladder,
 }
 
 /// A climb onto a ledge: straight up from `from` to `corner`, then over to `to`.
@@ -223,6 +229,15 @@ pub struct Landed {
 #[reflect(Component, Default)]
 pub struct JumpedFlight;
 
+/// On a body that jumped off a ladder and goes on pushing into it: it does not take hold again, so the
+/// jump lets go whatever the air control would bring it back with. Put by the controller on that jump and
+/// taken off once the body no longer pushes into a ladder it touches from the front (the input was let
+/// go, or it fell clear of the volume) or is out of the air; the next push into a ladder takes hold as
+/// ever. Never on a body that did not jump off a ladder.
+#[derive(Component, Reflect, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[reflect(Component, Default)]
+pub struct LadderLetGo;
+
 /// One-shot: the controller launches the body up so that it peaks `height` metres above the
 /// take-off, with the body's own gravity (`v = sqrt(2 * gravity * height)`), then removes this.
 /// The body must stand on the ground (or be within its coyote time of it, as a jump asks); a body
@@ -292,6 +307,9 @@ impl Plugin for ControllerPlugin {
             .register_type::<JumpedFlight>()
             // Like the glide latch: the own body's on a client.
             .net_predicted::<JumpedFlight>()
+            .register_type::<LadderLetGo>()
+            // The same: a client's own jump off a ladder runs there.
+            .net_predicted::<LadderLetGo>()
             .register_type::<Launch>()
             .register_type::<Ghost>()
             .register_type::<Crouch>()
@@ -341,7 +359,7 @@ type CharacterQuery<'w, 's, F = ()> = Query<
         &'static mut Transform,
         &'static mut Collider,
         Option<&'static MoveModifiers>,
-        Has<JumpedFlight>,
+        (Has<JumpedFlight>, Has<LadderLetGo>),
         Option<&'static Launch>,
         Has<Ghost>,
         Option<&'static Intent>,
@@ -386,7 +404,7 @@ pub fn move_characters<F: QueryFilter + 'static>(
     order.sort_unstable();
     let mut placed = Vec::with_capacity(order.len());
     for &(_, entity) in &order {
-        let Ok((_, _, controller, own, mut input, mut state, mut tf, mut collider, modifiers, flight, launch, ghost, intent, mut stance)) =
+        let Ok((_, _, controller, own, mut input, mut state, mut tf, mut collider, modifiers, (flight, let_go), launch, ghost, intent, mut stance)) =
             characters.get_mut(entity)
         else {
             continue;
@@ -465,6 +483,8 @@ pub fn move_characters<F: QueryFilter + 'static>(
             jumped_flight: flight,
             launch: launch.map(|l| l.height),
             crouched: depth > 0.0,
+            look: intent.and_then(|intent| params.bound_look(intent)),
+            let_go,
             notes: Vec::new(),
         };
         let feet = step.run(tf.translation);
@@ -521,8 +541,8 @@ fn sanitized(input: &LocomotionInput) -> LocomotionInput {
 fn trigger(commands: &mut Commands, entity: Entity, note: Note, tracks: bool) {
     match note {
         Note::Mode(from, to) => {
-            // Ground, water and a ledge end the flight, whether or not a landing was reported.
-            if tracks && matches!(to, MotionMode::Ground | MotionMode::Water | MotionMode::Mantle) {
+            // Ground, water, a ledge and a ladder end the flight, whether or not a landing was reported.
+            if tracks && matches!(to, MotionMode::Ground | MotionMode::Water | MotionMode::Mantle | MotionMode::Ladder) {
                 commands.entity(entity).try_remove::<JumpedFlight>();
             }
             commands.trigger(ModeChanged { entity, from, to })
@@ -542,6 +562,12 @@ fn trigger(commands: &mut Commands, entity: Entity, note: Note, tracks: bool) {
             commands.trigger(Landed { entity, fall_height, impact_speed, tier, jumped })
         }
         Note::Mantled { height } => commands.trigger(Mantled { entity, height }),
+        Note::LadderLetGo(true) => {
+            commands.entity(entity).try_insert(LadderLetGo);
+        }
+        Note::LadderLetGo(false) => {
+            commands.entity(entity).try_remove::<LadderLetGo>();
+        }
         Note::Entered(volume) => commands.trigger(VolumeEntered { entity, volume }),
         Note::Exited(volume) => commands.trigger(VolumeExited { entity, volume }),
     }

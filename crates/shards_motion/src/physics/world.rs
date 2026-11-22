@@ -46,6 +46,15 @@ pub struct Penetration {
     pub depth: f32,
 }
 
+/// A ladder volume as a climber meets it ([`PhysicsWorld::ladders_touching`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct LadderFace {
+    /// Out of the ladder, toward the side it is climbed from: level, of length 1.
+    pub out: Vec3,
+    /// The middle of the ladder's volume.
+    pub center: Vec3,
+}
+
 /// One collider in world space, as of the last sync.
 #[derive(Clone, Debug)]
 pub struct ColliderInfo {
@@ -962,6 +971,17 @@ impl PhysicsWorld {
                 && aabb_overlap(lo, hi, c.aabb_min, c.aabb_max)
                 && query::intersection_test(pose, geom.as_dyn(), &c.pose(), c.geom.as_dyn())
                     .is_ok_and(|t| t.intersecting)
+        })
+    }
+
+    /// The ladder volumes a shape touches, in id order, each with its face turned into the world. A
+    /// ladder whose face has no level part there (it points up or down) cannot be climbed and is left out.
+    pub(crate) fn ladders_touching<'a>(&'a self, geom: &'a Geom, pose: &'a Pose) -> impl Iterator<Item = LadderFace> + 'a {
+        self.volumes_touching(geom, pose).filter_map(|c| {
+            let Some(VolumeKind::Ladder { face }) = c.volume else { return None };
+            let turned = c.rotation * face;
+            let out = Vec3::new(turned.x, 0.0, turned.z).try_normalize()?;
+            Some(LadderFace { out, center: c.position })
         })
     }
 }

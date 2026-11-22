@@ -50,7 +50,7 @@ pub(crate) fn plugin(app: &mut App) {
             tracked(w, e.entity).map(|who| format!("{who} climbs a {:.1}m ledge", e.height))
         })
         .journal_event::<ModeChanged>(|e, w| {
-            let notable = |m: MotionMode| matches!(m, MotionMode::Water | MotionMode::Glide);
+            let notable = |m: MotionMode| matches!(m, MotionMode::Water | MotionMode::Glide | MotionMode::Ladder);
             (notable(e.from) || notable(e.to))
                 .then(|| tracked(w, e.entity))
                 .flatten()
@@ -87,11 +87,12 @@ fn mode_name(mode: MotionMode) -> &'static str {
         MotionMode::Water => "water",
         MotionMode::Glide => "glide",
         MotionMode::Mantle => "climbing",
+        MotionMode::Ladder => "ladder",
     }
 }
 
-/// `ground 5.8m/s`, `air ↑3.1m/s`, `water 2.0m/s`, `glide ↓2.0m/s`, `mantle 40%`; nothing
-/// while standing still. In the air only the vertical speed shows: where the character is
+/// `ground 5.8m/s`, `air ↑3.1m/s`, `water 2.0m/s`, `glide ↓2.0m/s`, `mantle 40%`, `ladder ↑3.5m/s`
+/// (`ladder` while it hangs); nothing while standing still. In the air only the vertical speed shows: where the character is
 /// going sideways follows from its position.
 pub fn describe_motion(s: &MotionState) -> String {
     let speed = crate::controller::mover::flat(s.velocity).length();
@@ -105,6 +106,9 @@ pub fn describe_motion(s: &MotionState) -> String {
         MotionMode::Water if speed < 0.05 => "water".to_owned(),
         MotionMode::Water => format!("water {speed:.1}m/s"),
         MotionMode::Mantle => format!("mantle {:.0}%", s.mantle.map_or(0.0, |m| m.t * 100.0)),
+        MotionMode::Ladder if s.velocity.length() < 0.05 => "ladder".to_owned(),
+        MotionMode::Ladder if s.velocity.y.abs() < 0.05 => format!("ladder {speed:.1}m/s"),
+        MotionMode::Ladder => format!("ladder {vertical}"),
     }
 }
 
@@ -168,6 +172,11 @@ mod tests {
             ..default()
         };
         assert_eq!(describe_motion(&climbing), "mantle 40%");
+        assert_eq!(describe_motion(&s(MotionMode::Ladder, Vec3::ZERO)), "ladder", "hanging on one");
+        assert_eq!(describe_motion(&s(MotionMode::Ladder, Vec3::Y * 3.5)), "ladder ↑3.5m/s");
+        assert_eq!(describe_motion(&s(MotionMode::Ladder, Vec3::Y * -3.5)), "ladder ↓3.5m/s");
+        assert_eq!(describe_motion(&s(MotionMode::Ladder, Vec3::Z * 3.5)), "ladder 3.5m/s", "sideways along it");
+        assert_eq!(mode_name(MotionMode::Ladder), "ladder");
     }
 
     #[test]

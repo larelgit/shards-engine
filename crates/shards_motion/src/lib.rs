@@ -1,10 +1,10 @@
 //! # shards_motion — physics, character, input, camera
 //!
 //! - [`physics`]: colliders with deterministic ids, collision layers, sensor volumes
-//!   (water, updrafts, triggers) and queries (`raycast`, `shapecast`, `overlaps`,
+//!   (water, updrafts, ladders, triggers) and queries (`raycast`, `shapecast`, `overlaps`,
 //!   `volumes_at`) on [`PhysicsWorld`], usable from systems and from `&World` (AI tools).
 //! - [`controller`]: the kinematic character controller — walk, run, sprint, slopes,
-//!   stairs, jump, mantle, swim, glide — driven by [`LocomotionInput`]. Its numbers are
+//!   stairs, jump, mantle, swim, glide, ladders — driven by [`LocomotionInput`]. Its numbers are
 //!   content (`locomotion`, hot-reloadable).
 //! - [`intent`](MotionSystems): `Intent` → [`LocomotionInput`], the one way characters are
 //!   steered.
@@ -86,7 +86,7 @@ pub use camera::{CameraSettings, FirstPersonCamera, LockHooks, LockOnDef, LockOn
 pub use eye::{aim_point_of, eye_of, look_dir, params_of};
 pub use controller::{
     character, CharacterController, CharacterParams, ControllerPlugin, ControllerSystems, Crouch, Crouched, Facing, Ghost, Jumped,
-    JumpedFlight, Landed, Launch, SprintResume, Stood,
+    JumpedFlight, LadderLetGo, Landed, Launch, SprintResume, Stood,
     LocomotionInput, Mantle, Mantled, ModeChanged, MotionMode, MotionState,
 };
 pub use controller::AccelModel;

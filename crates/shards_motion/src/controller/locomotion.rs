@@ -5,9 +5,10 @@
 //! whatever the tick rate.
 
 use bevy::prelude::*;
+use shards_core::Gaze;
 
 use super::accel::{air_accelerate, apply_friction, ground_accelerate, limit_air_speed, AccelModel};
-use super::mover::{clip, flat, Mover, Slide, Touch};
+use super::mover::{clip, flat, Ladder, Mover, Slide, Touch};
 use super::params::{CharacterParams, MANTLE_SLACK};
 use super::{LocomotionInput, Mantle, MotionMode, MotionState};
 use crate::modifiers::MoveModifiers;
@@ -18,8 +19,16 @@ const LAND_PROBE: f32 = 0.05;
 const SHALLOW_MARGIN: f32 = 0.1;
 /// How fast a swimmer drifts to the floating height (1/s of the height error).
 const FLOAT_RATE: f32 = 4.0;
-/// A ledge is climbed when the input points at it within 60°.
+/// A ledge is climbed, and a ladder taken hold of, when the input points at it within 60°.
 const PUSH_COS: f32 = 0.5;
+/// A ladder is taken hold of where something solid stops the body within this far into it (m): the wall
+/// it hangs on, or its own collider.
+const LADDER_BLOCKED: f32 = 0.05;
+/// A body in the air that moves away from a ladder faster than this (m/s) does not take hold of it: a
+/// jump off a ladder lets go of it.
+const LADDER_LEAVING: f32 = 0.1;
+/// A cast that comes up this much short of its length (m) went the whole way: rounding.
+const CAST_SLACK: f32 = 1e-4;
 
 /// What happened, for the events the system triggers afterwards.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -30,6 +39,9 @@ pub(crate) enum Note {
     Launched,
     Landed { fall_height: f32, impact_speed: f32, tier: u8, jumped: bool },
     Mantled { height: f32 },
+    /// The body jumped off a ladder (`true`: [`LadderLetGo`](super::LadderLetGo) goes on), or no longer
+    /// pushes into one after such a jump (`false`: it comes off).
+    LadderLetGo(bool),
     Entered(Entity),
     Exited(Entity),
 }
@@ -52,7 +64,23 @@ pub(crate) struct Step<'a, 'w> {
     /// The body is below its standing height (F2): on the ground it walks no faster than the params'
     /// `crouch_speed` and never sprints.
     pub crouched: bool,
+    /// The look the body's yaw is bound to (`face: Look`): what `ladder_by_look` climbs by.
+    pub look: Option<Gaze>,
+    /// The body jumped off a ladder and has pushed into it ever since
+    /// ([`LadderLetGo`](super::LadderLetGo)): it takes hold of none.
+    pub let_go: bool,
     pub notes: Vec<Note>,
+}
+
+/// The movement input as a ladder reads it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct LadderWish {
+    /// Up the ladder, in `ladder_speed`s: 1 climbs at full speed, negative goes down.
+    climb: f32,
+    /// Along the ladder's face, level: sideways.
+    side: Vec3,
+    /// How much of the input points into the ladder (negative: away from it), whatever the look.
+    into: f32,
 }
 
 impl Step<'_, '_> {
@@ -72,12 +100,21 @@ impl Step<'_, '_> {
             // A launch asked for by the body's owner: on the ground, or within coyote time of it.
             MotionMode::Ground | MotionMode::Air if self.launches() => self.launch(feet),
             MotionMode::Mantle => self.mantle(feet),
+            MotionMode::Ladder => self.ladder(feet),
             MotionMode::Ground => self.ground(feet),
             MotionMode::Air | MotionMode::Glide => self.air(feet),
             MotionMode::Water => self.water(feet),
         };
         let feet = if self.state.mode == MotionMode::Mantle { feet } else { self.mover.depenetrate(feet) };
         let feet = self.surroundings(feet);
+        // A jump off a ladder is over once the body stops pushing into the ladder, or is out of the air. The
+        // jump's own tick only set it.
+        if self.let_go
+            && !self.notes.contains(&Note::LadderLetGo(true))
+            && !(matches!(self.state.mode, MotionMode::Air | MotionMode::Glide) && self.pushes_into_ladder(feet).is_some())
+        {
+            self.notes.push(Note::LadderLetGo(false));
+        }
         let dt = self.dt;
         let s = &mut *self.state;
         s.jump_buffer_left = (s.jump_buffer_left - dt).max(0.0);
@@ -121,6 +158,9 @@ impl Step<'_, '_> {
         let p = self.params;
         if self.state.jump_buffer_left > 0.0 && !self.input.locked {
             return self.jump(feet);
+        }
+        if self.takes_hold(feet) {
+            return self.hold(feet);
         }
         let wish = self.wish();
         let (speed, sprinting) = self.ground_speed(wish.length());
@@ -202,6 +242,12 @@ impl Step<'_, '_> {
                 feet - Vec3::Y * ground.drop
             }
             _ => {
+                // Off an edge inside a ladder's volume (its top, walked or backed off): onto the ladder, not
+                // into the fall. The next ticks climb down by the input that walked it off.
+                if self.params.can_climb_ladders() && !self.input.locked && self.mover.ladder(feet).is_some_and(|l| l.front) {
+                    self.hold_ladder();
+                    return feet;
+                }
                 let s = &mut *self.state;
                 s.grounded = false;
                 s.ground_normal = Vec3::Y;
@@ -264,6 +310,9 @@ impl Step<'_, '_> {
             && !locked
         {
             return self.jump(feet);
+        }
+        if self.takes_hold(feet) {
+            return self.hold(feet);
         }
         let glide = self.input.glide && !locked;
         if self.state.mode == MotionMode::Air && glide && self.state.velocity.y < 0.0 {
@@ -374,6 +423,10 @@ impl Step<'_, '_> {
             self.set_mode(MotionMode::Air);
             return self.air(feet);
         };
+        // A ladder out of the water is taken hold of like any other.
+        if self.takes_hold(feet) {
+            return self.hold(feet);
+        }
         // Jump in water: climb out where there is a ledge ahead.
         if self.state.jump_buffer_left > 0.0 && !self.input.locked {
             let dir = self.wish().try_normalize().unwrap_or(self.facing);
@@ -505,6 +558,167 @@ impl Step<'_, '_> {
             }
         }
         self.set_mode(MotionMode::Water);
+    }
+
+    // --- ladder ---------------------------------------------------------------------
+    //
+    // A ladder is a volume with a face ([`VolumeKind::Ladder`](crate::VolumeKind::Ladder)). Nothing is kept
+    // about it between ticks but the mode: the ladder is the one the capsule touches now.
+    //
+    // - **Taking hold.** A body whose params climb pushes into the ladder (within 60 degrees) from its front
+    //   and something solid stops it: on the ground, in the air (a fall is caught; a body flying away from
+    //   the ladder is not) or swimming. A body that walks off an edge inside the volume (the ladder's top,
+    //   forward or backward) takes hold too, whatever it pushes (`stick`).
+    // - **Climbing.** No gravity. The part of the input into the ladder climbs, the part away from it goes
+    //   down, the rest slides sideways; no input hangs. `ladder_by_look` tilts the forward input by the
+    //   look's pitch first, as *Half-Life* does.
+    // - **The top.** Where the way in is open and there is floor one radius in, the body walks in level,
+    //   still held, until its axis is over the floor, and stands. A ladder that leads nowhere stops the
+    //   climb where the hold would end.
+    // - **The foot.** A body that is not climbing up stands on ground it reaches.
+    // - **Letting go.** A jump pushes the body off, out of the face, and the body takes hold of no ladder
+    //   while it goes on pushing into this one ([`LadderLetGo`](super::LadderLetGo), the one thing kept
+    //   beside the mode): air control must not bring it straight back. Leaving the volume (sideways, or down
+    //   past its foot) lets go too, and the fall starts there.
+
+    /// The movement input as a ladder with the face `out` reads it.
+    fn ladder_wish(&self, out: Vec3) -> LadderWish {
+        let wish = self.wish();
+        // Half-Life's rule: the forward part of the input goes along the look's pitch.
+        let (level, lift) = match self.look.filter(|_| self.params.ladder_by_look) {
+            Some(look) => {
+                let forward = look.flat_dir();
+                let ahead = wish.dot(forward);
+                let (sin, cos) = ops::sin_cos(look.pitch);
+                (wish + forward * (ahead * (cos - 1.0)), ahead * sin)
+            }
+            None => (wish, 0.0),
+        };
+        let away = level.dot(out);
+        LadderWish { climb: lift - away, side: level - out * away, into: -wish.dot(out) }
+    }
+
+    /// The face of the ladder the body at `feet` pushes into: it touches one from its front and its input
+    /// points into it within 60 degrees.
+    fn pushes_into_ladder(&self, feet: Vec3) -> Option<Vec3> {
+        let Ladder { out, .. } = self.mover.ladder(feet).filter(|l| l.front)?;
+        (self.wish().normalize_or_zero().dot(-out) >= PUSH_COS).then_some(out)
+    }
+
+    /// Whether the body takes hold of a ladder at `feet` this tick (see "Taking hold" above).
+    fn takes_hold(&self, feet: Vec3) -> bool {
+        if !self.params.can_climb_ladders() || self.input.locked || self.let_go {
+            return false;
+        }
+        let Some(out) = self.pushes_into_ladder(feet) else {
+            return false;
+        };
+        match self.state.mode {
+            // From the ground the push must climb: a look that sends it down has nowhere to go.
+            MotionMode::Ground if self.ladder_wish(out).climb <= 0.0 => return false,
+            MotionMode::Air | MotionMode::Glide if flat(self.state.velocity).dot(out) > LADDER_LEAVING => return false,
+            _ => {}
+        }
+        self.mover.free(feet, -out, LADDER_BLOCKED) < LADDER_BLOCKED - CAST_SLACK
+    }
+
+    /// The body is on a ladder from now on: at rest, with no fall behind it and no jump waiting.
+    fn hold_ladder(&mut self) {
+        let s = &mut *self.state;
+        s.velocity = Vec3::ZERO;
+        s.grounded = false;
+        s.ground_normal = Vec3::Y;
+        s.fall_from_y = None;
+        s.coyote_left = 0.0;
+        s.jump_buffer_left = 0.0;
+        s.sprinting = false;
+        self.set_mode(MotionMode::Ladder);
+    }
+
+    /// Takes hold and climbs the rest of the tick.
+    fn hold(&mut self, feet: Vec3) -> Vec3 {
+        self.hold_ladder();
+        self.ladder(feet)
+    }
+
+    fn ladder(&mut self, feet: Vec3) -> Vec3 {
+        let p = self.params;
+        let Some(Ladder { out, .. }) = self.mover.ladder(feet).filter(|_| p.can_climb_ladders()) else {
+            // Off the ladder's side or past its foot, or the ladder is gone: the fall starts here.
+            self.state.fall_from_y = Some(feet.y);
+            self.set_mode(MotionMode::Air);
+            return self.air(feet);
+        };
+        if self.state.jump_buffer_left > 0.0 && !self.input.locked {
+            let s = &mut *self.state;
+            s.velocity = out * p.ladder_jump_speed;
+            s.jump_buffer_left = 0.0;
+            s.fall_from_y = Some(feet.y);
+            self.notes.push(Note::Jumped);
+            self.notes.push(Note::LadderLetGo(true));
+            self.let_go = true;
+            self.set_mode(MotionMode::Air);
+            return self.air(feet);
+        }
+        let wish = self.ladder_wish(out);
+        let speed = p.ladder_speed * self.modifiers.factor;
+        // The top: the way in is open and there is floor there. In, level, until the floor is under the axis.
+        if wish.into > 0.0 && self.floor_ahead(feet, out) {
+            let mut v = (wish.side - out * wish.into) * speed;
+            let moved = self.mover.slide(feet, v * self.dt + self.input.external, false);
+            for touch in &moved.touches {
+                v = clip(v, touch.normal);
+            }
+            self.state.velocity = v;
+            if self.mover.floor_under(moved.feet, p.snap_distance)
+                && let Some(feet) = self.stand(moved.feet, p.snap_distance)
+            {
+                return feet;
+            }
+            return moved.feet;
+        }
+        let mut v = Vec3::Y * (wish.climb * speed) + wish.side * speed;
+        let delta = v * self.dt + self.input.external;
+        let mut moved = self.mover.slide(feet, delta, false);
+        // A ladder that ends in the air: no higher than a hold on it reaches.
+        if v.y > 0.0 && self.mover.ladder(moved.feet).is_none() {
+            v.y = 0.0;
+            moved = self.mover.slide(feet, flat(delta), false);
+        }
+        for touch in &moved.touches {
+            v = clip(v, touch.normal);
+        }
+        self.state.velocity = v;
+        // The foot: a body that is not climbing up stands on the ground it reaches.
+        if wish.climb <= 0.0
+            && let Some(feet) = self.stand(moved.feet, LAND_PROBE)
+        {
+            return feet;
+        }
+        moved.feet
+    }
+
+    /// Whether a body on a ladder with the face `out` can walk off it into the ladder's side: nothing
+    /// stops the capsule for one radius that way, and it would have walkable ground under it there. True
+    /// at a ladder's top once the feet are over the floor it leads to; never against the wall it hangs on.
+    fn floor_ahead(&self, feet: Vec3, out: Vec3) -> bool {
+        let reach = self.mover.radius;
+        self.mover.free(feet, -out, reach) >= reach - CAST_SLACK
+            && self.mover.ground(feet - out * reach, self.params.snap_distance).is_some_and(|g| g.walkable)
+    }
+
+    /// Stands the body on walkable ground within `reach` under the feet, off a ladder: no landing is
+    /// reported, a climb is no fall. `None` when there is none.
+    fn stand(&mut self, feet: Vec3, reach: f32) -> Option<Vec3> {
+        let ground = self.mover.ground(feet, reach).filter(|g| g.walkable)?;
+        let s = &mut *self.state;
+        s.grounded = true;
+        s.ground_normal = ground.normal;
+        s.coyote_left = self.params.coyote_time;
+        s.velocity.y = 0.0;
+        s.fall_from_y = None;
+        self.set_mode(MotionMode::Ground);
+        Some(feet - Vec3::Y * ground.drop)
     }
 
     // --- mantle ---------------------------------------------------------------------
