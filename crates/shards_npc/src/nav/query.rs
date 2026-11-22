@@ -35,6 +35,9 @@ const START_REACH: f32 = 1.0;
 const GOAL_REACH: f32 = 2.0;
 /// A body's goal (another body) is a floor within this height of its feet (m).
 const GOAL_BAND: f32 = 2.5;
+/// In hand-made levels, a goal is a floor within this height of it where there is one (m): rooms
+/// have roofs, and a floor has floors above it.
+const LEVEL_GOAL_BAND: f32 = 1.5;
 /// Nodes a search over the whole region may expand.
 const FULL_BUDGET: usize = 120_000;
 /// How many nodes ahead string pulling looks for a straight line.
@@ -264,10 +267,26 @@ impl NavRegion {
     }
 
     /// The goal's node: its own column first (a body's: within its height band; a point's:
-    /// the floor nearest its height), else the nearest within two meters.
+    /// the floor nearest its height), else the nearest within two meters. In hand-made levels a
+    /// point's height is a real one: a floor near that height, in its own column or within two
+    /// meters, comes before a floor far over or under it (the roof over a goal that stands by a
+    /// wall, where the baked body has no room in the goal's own column).
     fn goal_node(&self, query: &NavQuery) -> Option<NodeId> {
         let band = if query.goal_level { GOAL_BAND } else { f32::INFINITY };
         let to = query.to;
+        if self.levels.is_some() && !query.goal_level {
+            let near = self
+                .nodes_at(self.column_of(to))
+                .filter(|n| !self.is_disabled(*n) && (self.node_pos(*n).y - to.y).abs() <= LEVEL_GOAL_BAND)
+                .min_by(|a, b| {
+                    let (da, db) = ((self.node_pos(*a).y - to.y).abs(), (self.node_pos(*b).y - to.y).abs());
+                    da.total_cmp(&db).then(a.cmp(b))
+                })
+                .or_else(|| self.nearest_node(to, GOAL_REACH, LEVEL_GOAL_BAND));
+            if near.is_some() {
+                return near;
+            }
+        }
         let own = self
             .nodes_at(self.column_of(to))
             .filter(|n| !self.is_disabled(*n) && (self.node_pos(*n).y - to.y).abs() <= band)

@@ -3864,6 +3864,25 @@ that does not say so keeps the local grid, so a game that changes nothing plays 
 - **Body classes and `safe_drop`** come from the `nav` settings, as for a region. An NPC routes on the tightest class
   that serves its body; one no class serves, or one that stands outside the levels that have a navmesh, plans on the
   local grid (`npc_state` says which: `navmesh, body agent`, or `local grid: …`).
+- **When it is built.** At the first refresh after the levels change: the first tick's routes, or a tool. A game
+  that places its levels as it builds its world calls `shards::npc::nav::refresh(world)` right after, so the navmesh
+  is made with the world and what it reads of content (the `nav` settings, the bodies' `locomotion`) is read then, in
+  a game begun afresh and in one a replay or a snapshot builds alike (the replay check `content`).
+- **A goal's height is a real one.** Rooms have roofs, and a floor has floors above it, so a goal's node is a floor
+  within 1.5 m of its height, in its own column or within two meters, before any floor far over or under it: a goal
+  that stands by a wall, where the baked body has no room in its own column, is on the floor beside it and not on the
+  roof over it.
+- **A climb the body does not make.** A route may plan a climb (within the baked body's `mantle_height`) onto a
+  ledge the controller then does not climb, because the body has no room to stand on it: a stair's tread, half a meter
+  deep, reached from the stair's side. An NPC sent that way presses against the stair. Close a stair's sides with a
+  rail or a wall, or bake the class for a body whose `mantle_height` is its `step_height` (a `locomotion` of its own
+  for the nav settings' `agent` or `bodies`), so its routes plan no climb and go round to the foot of the stairs; a
+  class serves every body that climbs at least as well.
+- **A doorway the grid misses.** The cells are fixed in the world, so a doorway narrower than the baked body and a
+  cell together (1.3 m for the default body at 0.5 m cells) may fall between two columns and be a gap in the navmesh.
+  Where the levels' navmesh has no route, the route provider asks the local grid too, which is centred on the walker
+  and plans with its own body, and the NPC walks through as it did before the level had a navmesh. Make a doorway
+  that wide, or a class of a narrower body, for routes that plan through it from afar.
 - **Only machines that simulate** bake, as for a voxel region. With a region loaded the navmesh is the region's, and
   levels laid on it carve it, as before.
 
