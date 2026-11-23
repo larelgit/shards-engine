@@ -12,12 +12,14 @@
 //! it, so the players a game spawned on entering `InGame` stay (the region module moves
 //! them); `OnEnter`/`OnExit(RegionLoading)` mark the trip. `PauseState::Paused` is the player's pause
 //! (a menu): in single player it pauses the simulation, and an agent's `resume` closes
-//! it again. Pausing the simulation itself (`shards pause`, `--paused`) is a dev tool and
-//! leaves `PauseState` alone, so stepping a game never pops a menu up.
+//! it again; while a replay plays, the recording's ticks run on under a menu it opened, and
+//! its end pauses if that menu is still up. Pausing the simulation itself (`shards pause`,
+//! `--paused`) is a dev tool and leaves `PauseState` alone, so stepping a game never pops a
+//! menu up.
 
 use ai_core::journal::{AiJournal, JournalKind};
 use ai_core::state::ComponentValues;
-use ai_core::{sim, AiId, SimTick};
+use ai_core::{sim, AiId, AiReplay, SimTick};
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -167,38 +169,65 @@ pub fn player_body(world: &World, n: u8) -> Option<AiId> {
 #[reflect(Component, Default)]
 pub struct LocalPlayer;
 
-/// `PauseState::Paused` paused the simulation, so leaving it resumes.
+/// What `PauseState::Paused` did to the simulation's clock.
 #[derive(Resource, Default)]
-pub(crate) struct MenuPaused(bool);
+pub(crate) struct MenuPaused {
+    /// It paused the clock, so leaving it resumes.
+    paused: bool,
+    /// It came while a replay played, and the clock ran on under the menu: the recording holds
+    /// which ticks ran while it was up, and the end of the replay pauses, if the menu is still up.
+    under_replay: bool,
+}
 
+/// `OnEnter(PauseState::Paused)`: single player, a menu pauses the simulation.
+///
+/// Not while a replay plays: the recording decides which ticks run. The pause menu took effect after
+/// that frame's time was counted (Bevy counts it in `First`, a menu opens in `PreUpdate`), so the
+/// session may have run one more tick under it, and the call that closed it then stands one tick
+/// after the call that opened it. In playback the call that opens it comes inside a tick, and a
+/// paused clock would never reach the tick of the one that closes it.
 pub(crate) fn pause_simulation(world: &mut World) {
     if *world.resource::<NetRole>() != NetRole::Single || sim::is_paused(world) {
         return;
     }
+    if world.get_resource::<AiReplay>().is_some_and(AiReplay::is_playing) {
+        world.resource_mut::<MenuPaused>().under_replay = true;
+        return;
+    }
     sim::pause(world);
-    world.resource_mut::<MenuPaused>().0 = true;
+    world.resource_mut::<MenuPaused>().paused = true;
 }
 
 pub(crate) fn resume_simulation(world: &mut World) {
-    let paused_it = std::mem::take(&mut world.resource_mut::<MenuPaused>().0);
-    if paused_it && sim::is_paused(world) && sim::gate_message(world).is_none() {
+    let menu = std::mem::take(&mut *world.resource_mut::<MenuPaused>());
+    if menu.paused && sim::is_paused(world) && sim::gate_message(world).is_none() {
         sim::resume(world);
     }
 }
 
 /// `PreUpdate`: the simulation runs again (an agent's `resume`) while the pause menu is
-/// up in single player: the menu closes.
+/// up in single player: the menu closes. A menu a replay opened stays up while the replay plays on
+/// under it, and pauses the game once the replay is over (it ended, or someone took over).
 pub(crate) fn close_pause_when_resumed(
     state: Option<Res<State<PauseState>>>,
     role: Res<NetRole>,
-    time: Res<Time<Virtual>>,
+    replay: Option<Res<AiReplay>>,
+    mut time: ResMut<Time<Virtual>>,
     mut menu: ResMut<MenuPaused>,
     mut next: ResMut<NextState<PauseState>>,
 ) {
-    if state.is_some_and(|s| *s.get() == PauseState::Paused) && *role == NetRole::Single && !time.is_paused() {
-        menu.0 = false;
-        next.set(PauseState::Running);
+    if !(state.is_some_and(|s| *s.get() == PauseState::Paused) && *role == NetRole::Single && !time.is_paused()) {
+        return;
     }
+    if menu.under_replay {
+        if !replay.is_some_and(|r| r.is_playing()) {
+            *menu = MenuPaused { paused: true, under_replay: false };
+            time.pause();
+        }
+        return;
+    }
+    menu.paused = false;
+    next.set(PauseState::Running);
 }
 
 /// The simulation's scope while a change of `EngineState` runs: its `OnExit`/`OnEnter` systems

@@ -138,7 +138,7 @@ const OUTSIDE: &[(&str, &str)] = &[
     ("shards_core::loading::LoadingGate", "what loading waits for, and the failures journaled already"),
     ("shards_core::menu::MainMenuClock", "the main menu's clock, outside the game"),
     ("shards_core::seed::SeedLock", "a co-op client's wait for the host's seed at start"),
-    ("shards_core::state::MenuPaused", "whether the pause menu paused the clock"),
+    ("shards_core::state::MenuPaused", "whether the pause menu paused the clock, or a replay ran on under it"),
     ("shards_core::state::NetPrediction", "a co-op client's view of the host's tick, written by the network"),
     ("shards_core::state::NetRole", "single player, host or client: the session's, chosen at start"),
     ("shards_core::state::PredictedMotion", "the motion module's correction functions, set at build time"),

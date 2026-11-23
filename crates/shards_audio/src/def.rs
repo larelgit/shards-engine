@@ -73,6 +73,7 @@ impl Falloff {
 ///     ),
 ///     "ui_press": (files: ["sounds/ui_press.wav"], bus: Ui, volume: 0.6),
 ///     "warden_gate": (files: ["voice/warden_gate.ogg"], bus: Voice, subtitle: "@warden-gate", speaker: "@warden"),
+///     "radio_beep": (files: ["sounds/beep.wav"], bus: Voice, subtitle: "@radio-orders", shown: 6.0),
 ///     "vent_hum": (files: ["sounds/vent_hum.wav"], priority: 40, spatial: (near: 2.0, far: 18.0), looped: true),
 /// }
 /// ```
@@ -105,6 +106,13 @@ pub struct SoundDef {
     /// Who says it, before the line (`Warden: …`): text or `@id`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub speaker: Option<String>,
+    /// Seconds its line shows at least, from the start: a long line on a short sound (a beep before a
+    /// notice) is still read. Without it, a line shows for the sound's length and
+    /// [`LINGER_S`](crate::subtitles::LINGER_S), at least [`MIN_SHOWN_S`](crate::subtitles::MIN_SHOWN_S).
+    /// A sound without a `subtitle` may name it as the time of the lines the game says with it
+    /// ([`say`](crate::subtitles::say) takes the seconds from the game, which reads them here).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shown: Option<f32>,
     /// Plays over and over until its [`SoundEmitter`](crate::SoundEmitter) lets it go (a hum, dripping
     /// water, a radio). Only an emitter plays a looped sound: an action, an event, a telegraph or the
     /// `sound_play` tool refuses it, and the content check finds a mixer event, a telegraph or a
@@ -160,11 +168,16 @@ impl ContentDef for SoundDef {
         if self.speaker.is_some() && self.subtitle.is_none() {
             refs.error("speaker without a subtitle: there is no line to put the name before");
         }
+        if let Some(shown) = self.shown
+            && !(shown > 0.0 && shown.is_finite())
+        {
+            refs.error(format!("shown: the seconds its line shows, more than 0, not {shown}; leave it out for its length"));
+        }
         let texts = [(self.subtitle.as_deref(), "`subtitle`"), (self.speaker.as_deref(), "`speaker`")];
         shards_locale::check_messages(refs, texts.into_iter().filter_map(|(t, field)| Some((t?, field.to_owned()))));
         if self.looped {
-            if self.subtitle.is_some() || self.speaker.is_some() {
-                refs.error("looped: a sound that never ends has no line to show; leave out `subtitle` and `speaker`");
+            if self.subtitle.is_some() || self.speaker.is_some() || self.shown.is_some() {
+                refs.error("looped: a sound that never ends has no line to show; leave out `subtitle`, `speaker` and `shown`");
             }
             if self.max_instances.is_some() {
                 refs.error(
