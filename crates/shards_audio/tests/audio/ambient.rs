@@ -385,7 +385,7 @@ fn the_content_check_refuses_a_looped_sound_played_once_and_a_bad_loop() {
     );
     let errors: Vec<String> = check_dir(assets.path(), &kinds).unwrap_err().iter().map(ToString::to_string).collect();
     let has = |needle: &str| assert!(errors.iter().any(|e| e.contains(needle)), "no `{needle}` in:\n{}", errors.join("\n"));
-    has("looped: a sound that never ends has no line to show; leave out `subtitle` and `speaker`");
+    has("looped: a sound that never ends has no line to show; leave out `subtitle`, `speaker` and `shown`");
     has("looped: its voices belong to its emitters");
     has("sounds.healed: `hum` loops, and an event plays a sound once; only a `SoundEmitter` plays a looped sound");
     has("occlusion.gain: 0 to 1, not 1.5");

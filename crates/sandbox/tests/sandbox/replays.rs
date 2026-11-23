@@ -5,6 +5,7 @@ use sandbox::gameplay::Player;
 use sandbox::SandboxPlugin;
 use shards::ai_core::replay::{self, Replay, ReplayEvent};
 use shards::ai_core::{call_tool, AiJournal, AiReplay, CheckDetail, EntityChange, JournalKind, Scope};
+use shards::bevy::input::keyboard::Key;
 use shards::prelude::*;
 use shards::serde_json::{self, json, Value};
 
@@ -877,4 +878,153 @@ fn a_replay_with_a_swim_verifies_with_animated_bodies_in_the_water() {
     let strokes = played_swimming("body_motion.json");
     assert!(strokes.swam && strokes.sword_in_hand_afloat, "the stroke never made the rules step aside: {strokes:?}");
     assert!(strokes.dropped, "the model was never lowered: {strokes:?}");
+}
+
+/// A frame of a screen twice as fast as the ticks (120 Hz over 60 ticks a second): a tick runs every
+/// other frame.
+const FAST_FRAME: std::time::Duration = std::time::Duration::from_nanos(8_333_333);
+
+/// The sandbox played in real time on such a screen.
+fn on_a_fast_screen(seed: u64) -> App {
+    let mut app = sandbox::test_app(seed);
+    app.insert_resource(shards::bevy::time::TimeUpdateStrategy::ManualDuration(FAST_FRAME));
+    app
+}
+
+fn frames(app: &mut App, n: u32) {
+    for _ in 0..n {
+        app.update();
+    }
+}
+
+/// `code` goes down for a few frames and comes up, as a window tells Bevy.
+fn tap(app: &mut App, code: KeyCode, logical: Key) {
+    use shards::bevy::input::keyboard::KeyboardInput;
+    use shards::bevy::input::ButtonState;
+    for state in [ButtonState::Pressed, ButtonState::Released] {
+        let key = KeyboardInput { key_code: code, logical_key: logical.clone(), state, text: None, repeat: false, window: Entity::PLACEHOLDER };
+        app.world_mut().write_message(key);
+        frames(app, 3);
+    }
+}
+
+/// Whether the next frame runs a tick: its time and what the last left over make one.
+fn ticks_next_frame(app: &App) -> bool {
+    let fixed = app.world().resource::<Time<Fixed>>();
+    fixed.overstep() + FAST_FRAME >= fixed.timestep()
+}
+
+/// What the menus did, and at which tick.
+fn menus(app: &App) -> Vec<(u64, String)> {
+    let journal = app.world().resource::<AiJournal>();
+    journal.after(0).0.filter(|e| e.kind == JournalKind::Local && e.text.starts_with("ui: ")).map(|e| (e.tick, e.text.clone())).collect()
+}
+
+/// A pause menu takes effect after its frame's time was counted (in `First`; the key opens it in
+/// `PreUpdate`), so the session runs that frame's tick under it, and the calls made in it stand a tick
+/// after the call that opened it. Played back, the opening call comes inside a tick: the replay must not
+/// stop the clock there, or it never reaches the tick of the calls that close the menu (playtest-1's
+/// stalled session).
+#[test]
+fn a_replay_with_a_pause_menu_in_it_plays_through_on_a_fast_screen() {
+    use shards::ai_core::sim;
+    use shards::core::PauseState;
+    let mut original = on_a_fast_screen(42);
+    original.update();
+    sim::resume(original.world_mut());
+    frames(&mut original, 31);
+    while !ticks_next_frame(&original) {
+        original.update();
+    }
+    let opened_at = sim::tick(original.world());
+    tap(&mut original, KeyCode::Escape, Key::Escape);
+    assert_eq!(sim::tick(original.world()), opened_at + 1, "the frame that opened the menu ran its tick");
+    assert!(sim::is_paused(original.world()), "the menu paused the game");
+    // In the menu: down to Settings, into it, back out of it and out of the pause.
+    tap(&mut original, KeyCode::ArrowDown, Key::ArrowDown);
+    tap(&mut original, KeyCode::Enter, Key::Enter);
+    tap(&mut original, KeyCode::Escape, Key::Escape);
+    tap(&mut original, KeyCode::Escape, Key::Escape);
+    frames(&mut original, 40);
+    assert!(!sim::is_paused(original.world()) && sim::tick(original.world()) > opened_at + 10, "the game runs again");
+    sim::pause(original.world_mut());
+    let replay: Replay = serde_json::from_str(&serde_json::to_string(&replay::save(original.world())).unwrap()).unwrap();
+    let calls: Vec<(u64, String)> = replay
+        .events
+        .iter()
+        .filter_map(|e| match e {
+            ReplayEvent::Call { at, tool, args, .. } => Some((*at, format!("{tool} {args}"))),
+            _ => None,
+        })
+        .collect();
+    let (open, inside) = (opened_at, opened_at + 1);
+    let want: Vec<(u64, String)> = [
+        (open, r#"ui_open {"screen":"pause"}"#),
+        (inside, r#"ui_navigate {"dir":"down"}"#),
+        (inside, r#"ui_navigate {"dir":"confirm"}"#),
+        (inside, r#"ui_navigate {"dir":"back"}"#),
+        (inside, r#"ui_navigate {"dir":"back"}"#),
+    ]
+    .into_iter()
+    .map(|(at, call)| (at, call.to_owned()))
+    .collect();
+    assert_eq!(calls, want, "the menu's calls stand a tick after the one that opened it");
+    let seen = menus(&original);
+    assert!(seen.iter().any(|(_, line)| line == "ui: opened settings"), "the test went into Settings: {seen:#?}");
+
+    // Played back on the same screen: through the menu and on to the end.
+    let mut window = on_a_fast_screen(42);
+    replay::play(window.world_mut(), replay.clone()).unwrap();
+    window.update();
+    sim::resume(window.world_mut());
+    for _ in 0..4 * replay.end.tick + 20 {
+        if window.world().resource::<AiReplay>().report().is_some() {
+            break;
+        }
+        window.update();
+    }
+    let Some(report) = window.world().resource::<AiReplay>().report().cloned() else {
+        panic!("the playback stopped at tick {} of {}", sim::tick(window.world()), replay.end.tick);
+    };
+    assert!(report.identical(), "{report}");
+    assert_eq!(menus(&window), seen, "the menus opened and closed at the same ticks");
+    assert_eq!(*window.world().resource::<State<PauseState>>().get(), PauseState::Running);
+    assert!(!sim::is_paused(window.world()), "nothing left the game paused");
+}
+
+/// A session that ends under the pause menu (an agent stepped the game under it) plays on under the menu
+/// to its end, and then the game pauses under it, as the session was.
+#[test]
+fn a_replay_that_ends_under_the_pause_menu_leaves_the_game_paused() {
+    use shards::ai_core::sim;
+    use shards::core::PauseState;
+    let mut original = on_a_fast_screen(42);
+    original.update();
+    sim::resume(original.world_mut());
+    frames(&mut original, 30);
+    tap(&mut original, KeyCode::Escape, Key::Escape);
+    assert!(sim::is_paused(original.world()), "the menu paused the game");
+    ok(&mut original, "step", json!({"ticks": 30}));
+    let replay: Replay = serde_json::from_str(&serde_json::to_string(&replay::save(original.world())).unwrap()).unwrap();
+
+    let mut window = on_a_fast_screen(42);
+    replay::play(window.world_mut(), replay.clone()).unwrap();
+    window.update();
+    sim::resume(window.world_mut());
+    for _ in 0..4 * replay.end.tick + 20 {
+        if window.world().resource::<AiReplay>().report().is_some() {
+            break;
+        }
+        window.update();
+    }
+    let Some(report) = window.world().resource::<AiReplay>().report().cloned() else {
+        panic!("the playback stopped at tick {} of {}", sim::tick(window.world()), replay.end.tick);
+    };
+    assert!(report.identical(), "{report}");
+    frames(&mut window, 4);
+    assert_eq!(*window.world().resource::<State<PauseState>>().get(), PauseState::Paused, "the menu is up");
+    assert!(sim::is_paused(window.world()), "and the game paused under it once the replay was over");
+    let at = sim::tick(window.world());
+    frames(&mut window, 10);
+    assert_eq!(sim::tick(window.world()), at);
 }

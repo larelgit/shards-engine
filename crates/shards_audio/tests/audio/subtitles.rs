@@ -1,10 +1,12 @@
 //! Subtitles (U4): a played voice's line through the source `subtitles`, for its length and a
-//! moment after; the same line once; a taken voice's line gone; a voice cut short (`stop`), faded out
-//! and its line gone at once; the setting; the language; the check.
+//! moment after, or its `shown` seconds; the same line once; a taken voice's line gone; a voice cut
+//! short (`stop`), faded out and its line gone at once; a line the game says itself (`say`); the
+//! setting; the language; the check.
 
 use serde_json::json;
 use shards::ai_core::JournalKind;
-use shards::audio::{play, stop, Played, SoundAt};
+use shards::audio::subtitles::{say, Saying};
+use shards::audio::{play, stop, Bus, Played, SoundAt};
 use shards::content::{check_dir, ContentKinds};
 use shards::prelude::*;
 use shards::ui::{read_source, UiValue};
@@ -12,10 +14,12 @@ use shards::ui::{read_source, UiValue};
 use crate::*;
 
 /// A warden's line (`calm.wav`, 2 s) in two languages, a guard's bark (`beep.wav`, 0.5 s, weak) as
-/// written, and a line that is not a voice's.
+/// written, a notice too long to read in its beep, and a chime whose lines the game says.
 const LINES: &str = r#"{
     "gate": (files: ["music/calm.wav"], bus: Voice, subtitle: "@warden-gate", speaker: "@warden"),
     "bark": (files: ["sounds/beep.wav"], bus: Voice, priority: 50, subtitle: "Halt!"),
+    "notice": (files: ["sounds/beep.wav"], bus: Voice, subtitle: "[THE NORTH GATE CLOSES AT DUSK]", shown: 5.0),
+    "chime": (files: ["sounds/beep.wav"], bus: Ui, shown: 7.0),
 }"#;
 
 /// The test's asset folder with [`LINES`] and English and Russian text.
@@ -123,6 +127,54 @@ fn a_voice_cut_short_fades_out_and_its_line_goes_at_once() {
 }
 
 #[test]
+fn a_short_sound_shows_its_line_for_its_shown_seconds() {
+    let assets = folder("subtitles_shown");
+    let mut app = english(&assets);
+    play(app.world_mut(), "notice", SoundAt::Everywhere).unwrap();
+    wait(&mut app, 4.9);
+    assert_eq!(playing(&app), Vec::<String>::new(), "the beep is long over");
+    assert_eq!(shows(&app, "subtitles"), "[THE NORTH GATE CLOSES AT DUSK]");
+    wait(&mut app, 0.2);
+    assert_eq!(shows(&app, "subtitles"), "", "its 5 s are over");
+}
+
+/// The game says the words a chime brings (a tablet's new task): for the seconds it gives, on the clock
+/// it names, through everything a sound's line goes through, and a new one over the last.
+#[test]
+fn a_line_the_game_says_reads_as_a_sounds_line_and_goes_by_its_own_time() {
+    let assets = folder("subtitles_said");
+    let mut app = english(&assets);
+    // The chime's own definition holds the seconds; the game reads them there.
+    let secs = app.world().resource::<shards::content::ContentDb>().get::<shards::audio::SoundDef>("chime").and_then(|d| d.shown).unwrap();
+    let task = |text: &str| Saying { sound: "chime".into(), text: text.into(), speaker: None, secs, bus: Bus::Sfx };
+    play(app.world_mut(), "chime", SoundAt::Everywhere).unwrap();
+    assert_eq!(say(app.world_mut(), task("@warden-gate")), Ok("The gate holds.".into()));
+    assert_eq!(shows(&app, "subtitles"), "The gate holds.");
+    assert_eq!(journal(&app, JournalKind::Local, "subtitle:"), ["subtitle: The gate holds."]);
+    let said = ok(&mut app, "audio", json!({}));
+    assert!(said.contains("subtitles (shown): \"The gate holds.\" 7.0s more"), "{said}");
+
+    // Voices come and are taken (four voices, the bark the weakest), the language changes: the line stays
+    // and reads in the language played.
+    for _ in 0..5 {
+        play(app.world_mut(), "bark", SoundAt::Everywhere).unwrap();
+    }
+    ok(&mut app, "settings_set", json!({"group": "locale", "key": "language", "value": "ru"}));
+    assert_eq!(shows(&app, "subtitles"), "Ворота выстоят.\nHalt!");
+    wait(&mut app, 2.5);
+    assert_eq!(shows(&app, "subtitles"), "Ворота выстоят.", "the barks are over, the game's line is not");
+
+    // A new one for the same chime takes its place, and has its own seven seconds.
+    say(app.world_mut(), task("Report to the gate.")).unwrap();
+    assert_eq!(shows(&app, "subtitles"), "Report to the gate.");
+    wait(&mut app, 6.9);
+    assert_eq!(shows(&app, "subtitles"), "Report to the gate.", "the simulation's clock: steps run it, a pause holds it");
+    wait(&mut app, 0.2);
+    assert_eq!(shows(&app, "subtitles"), "");
+    assert_eq!(journal(&app, JournalKind::Local, "subtitle: Report").len(), 1);
+}
+
+#[test]
 fn the_setting_off_shows_none_and_a_language_switched_to_says_the_lines_showing() {
     let assets = folder("subtitles_settings");
     let mut app = english(&assets);
@@ -150,6 +202,7 @@ fn the_content_check_names_a_line_that_cannot_be_shown() {
             "mute": (files: ["sounds/beep.wav"], subtitle: " "),
             "who": (files: ["sounds/beep.wav"], speaker: "Warden"),
             "lost": (files: ["sounds/beep.wav"], subtitle: "@warden-gat", speaker: "@wardn"),
+            "never": (files: ["sounds/beep.wav"], subtitle: "Gone.", shown: 0.0),
         }"#,
     );
     let errors: Vec<String> = check_dir(assets.path(), &kinds).unwrap_err().iter().map(ToString::to_string).collect();
@@ -158,5 +211,6 @@ fn the_content_check_names_a_line_that_cannot_be_shown() {
     has("speaker without a subtitle: there is no line to put the name before");
     has("`subtitle` names message `warden-gat`, which en and ru have not, nor their fallbacks (did you mean `@warden-gate`?)");
     has("`speaker` names message `wardn`, which en and ru have not, nor their fallbacks (did you mean `@warden`?)");
-    assert_eq!(errors.len(), 4, "{errors:#?}");
+    has("shown: the seconds its line shows, more than 0, not 0; leave it out for its length");
+    assert_eq!(errors.len(), 5, "{errors:#?}");
 }

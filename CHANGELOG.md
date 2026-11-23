@@ -66,6 +66,14 @@ git push origin v0.1.0
 Changes that land in the main branch after phases C–E (`0.4.0`) go here.
 
 ### Added
+- The game's own subtitle lines (the manual's "Subtitles"): `shards::audio::subtitles::say(world, Saying { sound, text,
+  speaker, secs, bus })` shows a line that no voice says, for the seconds the game gives, on the clock of the bus it names
+  (the simulation's, so a pause holds it; real time on `Ui`): words the game puts together, such as a tablet's new task as
+  it chimes, or a line that outlasts its sound. It reaches everything a sound's line does (the source `subtitles`, `shown`,
+  `audio`, the journal's `[local] subtitle:`), a voice taken or stopped leaves it, and a new line the game says for the
+  same `sound` takes the place of the one before. `SoundDef` gained `shown`: the seconds its line shows at least (a long
+  line on a short beep), also where a game keeps the seconds of the lines it says with a sound; the content check refuses
+  `shown` that is not more than 0, and on a looped sound.
 - Ladders (the manual's "Ladders"). A new volume kind, `VolumeKind::Ladder { face }`: in a level file a node with
   `"volume": "ladder"` and `"face": [x, y, z]` (the way out of the ladder, toward the side it is climbed from, in the node's
   space), shaped by its collider like `water` and `updraft`. A body whose `locomotion` gives a `ladder_speed` (new, default 0:
@@ -375,6 +383,12 @@ Changes that land in the main branch after phases C–E (`0.4.0`) go here.
   and the timing `field_timing` (`#[ignore]`) in `physics/world.rs`.
 
 ### Fixed
+- A replay with a pause menu in it plays through (the manual's "Replays"). The menu takes effect after its frame's time is
+  counted, so the session may run that frame's tick under it and record the calls made in the menu one tick after the
+  call that opened it; played back, the opening call came inside a tick and paused the clock, which then never reached
+  the next one, and the game sat in the menu (seen in a returned play session). While a replay plays, a menu it opened no
+  longer pauses the simulation, and the game pauses under it once the replay is over if it is still up. Replays recorded
+  before play through as they are.
 - The navmesh of hand-made levels (the manual's "The navmesh of hand-made levels"): a goal by a wall, where the baked body has
   no room in the goal's own column, took the roof or the floor above it for its node and had no route; a goal's node is now a
   floor within 1.5 m of its height, in its column or within two meters, where there is one. A doorway narrower than the baked
@@ -402,6 +416,8 @@ Changes that land in the main branch after phases C–E (`0.4.0`) go here.
 
 ### Changed
 
+- Breaking: `shards::audio::LineVoice::voice` is an `Option<u64>` (`None` for a line the game said with `subtitles::say`), and
+  `SoundDef` gained `shown` (a struct literal that names every field needs `shown: None`).
 - Breaking (F11): `PerceptionDef` gained `notice`, `AttackPlanDef` `keep_range` (both take `..default()`), `FireDef` `aim_error_moving` and `aim_error_far`, `Resolved` `fires` and `ScheduleReport` `line_of_fire`: a struct literal that names every field needs them; `Refusal` has the new variant `LineOfFire` (it is `#[non_exhaustive]`: a `match` already has a `_` arm). `Npc` now requires `Intent`, so an NPC without `Fighter` (a non-combatant) is driven by its brain; every NPC with `Fighter` had one already.
 - Breaking (F1a): `Intent` gained `look` (a struct literal that names every field needs `look: None`, or `..default()`), `CharacterParams` gained `face`, `pitch_limits_deg` and `eye_height`, `shards_action::leap::LeapSite` gained `look` (build one with `LeapSite::body`), and `IntentState` (`shards_net::inputs`) gained `look`. `Intent` is now reflected through its serde form (`#[reflect(Serialize, Deserialize)]`): its reflection output is the same bytes as before while `look` is `None`. The character controller reads the body's `Intent` (a body with `face: Look` turns by it); `intent_to_locomotion` also reads the body's `locomotion`.
 - Weapons (F4) change three public types a game may match or build: `Blocker::NoCharges` has a new field `need` (and `Blocker` the variants `Dry` and `NothingToRefill`), `Effect` has the variant `Refill`, and `Cost` has `charge_count` (`Cost`'s default is now written by hand so that the count is 1; `MovesetDef` has `auto_reload` and `weapon`). `ActionSystems` has the new set `Weapons`, first in `SimSet::Act`. Content, content hashes and the reference replays of older games do not change.
