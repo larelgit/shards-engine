@@ -50,7 +50,7 @@ pub use first_person::{
     heading_of, look_through, turn_look, view_rotation, BobTuning, CameraMode, EyeFrame, EyeShift, EyeState, FirstPersonCamera, FirstPersonTuning, FromMode,
     LandingTuning, RollTuning, OWN_BODY_LAYER, VIEW_MODEL_LAYER,
 };
-pub use grading::{picture_clock, Grading, GradingBlend, GradingDef, GradingVolume};
+pub use grading::{grade_drawn_in_full, picture_clock, Grading, GradingBlend, GradingDef, GradingVolume};
 #[cfg(feature = "render")]
 pub use grading::GradingSet;
 pub use picture::{BloomComposite, BloomTuning, PictureTuning, SsaoQuality, SsaoTuning, ToneMapping};

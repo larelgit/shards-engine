@@ -382,3 +382,60 @@ fn ssao_from_the_camera_content_draws_through_the_first_person_cameras_and_goes_
     assert_eq!((msaa(&app, camera), msaa(&app, view_model)), (own, own), "the MSAA the camera had, on both");
     assert!(mean_difference(&plain, &back) < 1.0, "the plain picture again: {:.3}", mean_difference(&plain, &back));
 }
+
+/// How much of a grade Bevy draws: a camera in HDR is graded in the tone mapping pass, all of the grade; a camera that is
+/// not is graded in each material's shader, where Bevy applies the exposure alone. So a white balance draws nothing until
+/// a bloom puts the cameras in HDR, and an exposure draws the same either way; the `lights` query says which it is. (A
+/// game tuned its grades without HDR, at a white balance far too strong, and its picture went black and red when it
+/// turned a bloom on.) If Bevy starts to grade in full without HDR this fails, and the grading docs and the query's
+/// `drawn:` line want changing.
+#[test]
+#[ignore = "needs a GPU, or a software one (WGPU_FORCE_FALLBACK_ADAPTER=1): cargo test -p sandbox --test sandbox -- --ignored first_person"]
+fn a_grade_draws_its_exposure_alone_without_hdr_and_all_of_it_in_hdr() {
+    use shards::motion::camera::{BloomComposite, BloomTuning, Grading};
+
+    use crate::offscreen::block;
+
+    let mut app = offscreen_app();
+    let picture = app.world().resource::<Offscreen>().image.clone();
+    step(&mut app, 30);
+    look_down_through_the_eye(&mut app);
+    settle(&mut app, 200);
+    // The mean colour of the world above the arms, with this bloom and this grade (a `shot` first: it waits for the
+    // pipelines that a change to HDR compiles).
+    let world_with = |app: &mut App, name: &str, bloom: &Option<BloomTuning>, grade: Option<&Grading>| {
+        let mut tuning = app.world_mut().resource_mut::<CameraTuning>();
+        (tuning.picture.bloom, tuning.picture.grading) = (bloom.clone(), grade.cloned());
+        settle(app, 30);
+        shot_to(app, name);
+        let image = capture_stable(app, &picture);
+        block(&image, 0, 200, image.width(), 250)
+    };
+    let drawn = |app: &mut App| {
+        let said = ok(app, "lights", json!({})).result;
+        said.as_str().unwrap().lines().find(|l| l.starts_with("  drawn:")).map(str::to_owned)
+    };
+    let bloom = Some(BloomTuning { intensity: 0.1, threshold: 1.0, composite: BloomComposite::Additive, ..default() });
+    let warm = Grading { temperature: 0.05, ..default() };
+    let brighter = Grading { exposure: 1.7, ..default() };
+
+    let plain = world_with(&mut app, "grade-plain", &None, None);
+    let warm_ldr = world_with(&mut app, "grade-warm", &None, Some(&warm));
+    let said_ldr = drawn(&mut app);
+    let brighter_ldr = world_with(&mut app, "grade-brighter", &None, Some(&brighter));
+    let plain_hdr = world_with(&mut app, "grade-plain-hdr", &bloom, None);
+    let warm_hdr = world_with(&mut app, "grade-warm-hdr", &bloom, Some(&warm));
+    let said_hdr = drawn(&mut app);
+    let brighter_hdr = world_with(&mut app, "grade-brighter-hdr", &bloom, Some(&brighter));
+    eprintln!(
+        "the world's mean colour: plain {plain:.1?}, warm {warm_ldr:.1?}, brighter {brighter_ldr:.1?}; in HDR plain {plain_hdr:.1?}, warm {warm_hdr:.1?}, brighter {brighter_hdr:.1?}"
+    );
+    let alike = |a: [f64; 3], b: [f64; 3]| (0..3).all(|c| (a[c] - b[c]).abs() < 1.5);
+    assert!(alike(plain, warm_ldr), "without HDR a white balance draws nothing: {plain:.1?} and {warm_ldr:.1?}");
+    assert!(said_ldr.as_deref().is_some_and(|l| l.contains("its exposure alone") && l.contains("leaves out temperature")), "{said_ldr:?}");
+    assert!(brighter_ldr[1] > plain[1] + 20.0, "an exposure is drawn without HDR: {plain:.1?} and {brighter_ldr:.1?}");
+    assert!(alike(plain, plain_hdr), "this bloom leaves the world above the arms as it was: {plain:.1?} and {plain_hdr:.1?}");
+    assert!(warm_hdr[0] > plain_hdr[0] + 8.0 && warm_hdr[2] < plain_hdr[2] - 3.0, "in HDR it warms the picture: {plain_hdr:.1?} and {warm_hdr:.1?}");
+    assert_eq!(said_hdr.as_deref(), Some("  drawn: all of it (the camera draws in HDR)"));
+    assert!(alike(brighter_ldr, brighter_hdr), "and an exposure is drawn alike in both: {brighter_ldr:.1?} and {brighter_hdr:.1?}");
+}

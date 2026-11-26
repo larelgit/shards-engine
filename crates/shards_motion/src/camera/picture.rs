@@ -149,7 +149,8 @@ pub struct PictureTuning {
     pub bloom: Option<BloomTuning>,
     /// A colour grade of the whole picture (F13, [`Grading`]); `None` keeps the camera's own. A trigger volume with a
     /// `grading` blends the picture away from it and back (`GradingVolume`). Bevy grades just before tone mapping, so a
-    /// camera whose `tone_mapping` is `None` shows none of it.
+    /// camera whose `tone_mapping` is `None` shows none of it, and a camera that does not draw in HDR shows only its
+    /// `exposure`: the rest of a grade is drawn once a `bloom` (or the game's `Hdr`) puts the camera in HDR.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub grading: Option<Grading>,
     /// Screen-space ambient occlusion ([`SsaoTuning`]); `None` keeps the camera's own (none, unless the game gave it

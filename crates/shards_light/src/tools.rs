@@ -7,7 +7,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use shards_content::db::closest;
 use shards_content::ContentDb;
-use shards_motion::camera::{picture_clock, CameraTuning, Grading, GradingBlend, GradingDef};
+use shards_motion::camera::{grade_drawn_in_full, picture_clock, CameraTuning, Grading, GradingBlend, GradingDef};
 use shards_settings::FlashLevel;
 
 use crate::{update_state, Flicker, LightDef, LightInfo, LightState, ShadowBudget};
@@ -20,7 +20,8 @@ pub(crate) fn register(world: &mut World) {
 /// each is at this moment, who casts a shadow and why the others do not (against `graphics.shadow_lights`, or against
 /// `graphics.shadow_views` when it is set: a point light takes 6 views, a spot 1), and the grade the camera shows with the
 /// progress of its blend toward or away from a grading volume. Pictures only: it is the same headless, from the
-/// simulation's clock.
+/// simulation's clock, except for one line a drawn game adds when the grade has more than an exposure: how much of it
+/// the world cameras draw (all of it in HDR, its exposure alone without).
 #[derive(Deserialize, JsonSchema, Default)]
 pub struct LightsArgs {
     /// Only the lights of this `light` definition (`id=sodium`).
@@ -102,8 +103,9 @@ pub fn grade_text(grade: &Grading) -> String {
     if changed.is_empty() { "neutral".to_owned() } else { changed.join(", ") }
 }
 
-/// The `grading:` lines: the grade the camera shows and where its blend is.
-fn grading_lines(world: &World) -> Vec<String> {
+/// The `grading:` lines: the grade the camera shows, how much of it the cameras draw (`in_full`,
+/// [`grade_drawn_in_full`]) and where its blend is.
+fn grading_lines(world: &World, in_full: Option<bool>) -> Vec<String> {
     let (Some(blend), Some(fixed)) = (world.get_resource::<GradingBlend>(), world.get_resource::<Time<Fixed>>()) else {
         return vec!["grading: not in this game".to_owned()];
     };
@@ -124,6 +126,16 @@ fn grading_lines(world: &World) -> Vec<String> {
         None => "  shows: no grade of the content (the camera keeps whatever the game gave it)".to_owned(),
     };
     let mut out = vec![head, line];
+    let hdr_only = shown.as_ref().map(Grading::hdr_only).unwrap_or_default();
+    match in_full {
+        Some(false) if !hdr_only.is_empty() => out.push(format!(
+            "  drawn: its exposure alone; the camera draws without HDR, where Bevy grades in each material's shader and leaves out {} \
+             (a camera in HDR draws them: the picture's `bloom`, or the game's own `Hdr`)",
+            hdr_only.join(", ")
+        )),
+        Some(true) if !hdr_only.is_empty() => out.push("  drawn: all of it (the camera draws in HDR)".to_owned()),
+        _ => {}
+    }
     if base.is_some() {
         out.push("  the camera content's `picture.grading` is its own grade".to_owned());
     }
@@ -193,7 +205,8 @@ fn lights(In(call): In<Call<LightsArgs>>, world: &mut World) -> ToolResult {
     if shown.len() > limit {
         out.push(format!("  … and {} more (limit={limit})", shown.len() - limit));
     }
-    out.extend(grading_lines(world));
+    let in_full = grade_drawn_in_full(world);
+    out.extend(grading_lines(world, in_full));
     Ok(out.join("\n"))
 }
 

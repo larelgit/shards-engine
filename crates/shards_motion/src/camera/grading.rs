@@ -14,8 +14,20 @@
 //! - Picture only: nothing here is in a snapshot or a replay. The volume is read, never written; the
 //!   tracking runs in `FixedLast` so it sees each tick's volumes exactly, whatever the frame rate.
 //!
-//! Bevy applies a grade just before tone mapping, so a camera whose tone mapping is `None` shows
-//! none of it (the picture's `tone_mapping` doc says so). A game's own `ColorGrading` on a camera is
+//! **How much of a grade is drawn depends on the camera.** A camera that draws in HDR (the picture's `bloom`, or
+//! the game's own `Hdr`) is graded by Bevy's tone mapping pass, which draws all of the grade. A camera that does not
+//! draw in HDR is graded in each material's shader, and Bevy applies only the `exposure` there: `temperature`,
+//! `tint`, `hue_deg`, `saturation`, `contrast`, `lift`, `gamma` and `gain` are left out ([`Grading::hdr_only`]
+//! names them). Turning a bloom on therefore draws the rest of a grade for the first time, and a grade tuned without
+//! HDR can look nothing like it did. The `lights` query says which it is (`drawn:`). A camera whose tone mapping is
+//! `None` shows none of a grade (the picture's `tone_mapping` doc says so).
+//!
+//! In HDR Bevy grades in this order: the white balance, then saturation and contrast, then lift, gamma and gain,
+//! and the `exposure` last. Contrast pivots on 0.5 of the linear picture before the exposure, so a dark scene that the
+//! grade's exposure lifts loses its darks below zero: with `contrast` above 1 it goes black. Such a scene keeps
+//! `contrast` at 1, or is lit (or exposed by the camera's `Exposure`) instead.
+//!
+//! A game's own `ColorGrading` on a camera is
 //! kept while the content says nothing and put back when the content stops saying anything; a blend
 //! starts from the camera's content grading (or the neutral one), not from the game's own.
 
@@ -28,10 +40,11 @@ use shards_core::LocalPlayer;
 use super::CameraTuning;
 use crate::controller::MotionState;
 
-/// A grade of the picture. The neutral grade (the default) changes nothing.
+/// A grade of the picture. The neutral grade (the default) changes nothing. Every field but `exposure` is drawn only
+/// by a camera in HDR (the module says why).
 ///
 /// ```ron
-/// (temperature: 0.35, saturation: 0.7, contrast: 1.1)
+/// (temperature: 0.03, saturation: 0.8, contrast: 1.1)
 /// ```
 #[derive(Reflect, Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[reflect(Default)]
@@ -39,21 +52,26 @@ use crate::controller::MotionState;
 pub struct Grading {
     /// Exposure in stops (EV): 1 is twice the light. `-10` to `10`.
     pub exposure: f32,
-    /// White balance toward red (positive) or blue (negative), Bevy's units: `-1` to `1`, no change in brightness.
+    /// White balance toward red (positive) or blue (negative), no change in brightness. Bevy's units: what is taken
+    /// from the *x* of the white point in CIE 1931 (D65's is 0.3127), so small numbers are strong: 0.02 to 0.05 is a
+    /// clear warm or cool cast, and near 0.3 the white point leaves the colour diagram (the picture loses its green and
+    /// blue). The check allows `-1` to `1`. HDR only.
     pub temperature: f32,
-    /// White balance toward magenta (positive) or green (negative): `-1` to `1`.
+    /// White balance toward magenta (positive) or green (negative): what is added to the *y* of the white point (D65's
+    /// is 0.3290); 0.01 to 0.03 is a clear cast. The check allows `-1` to `1`. HDR only.
     pub tint: f32,
-    /// Turns every hue round the colour wheel, degrees: `-180` to `180`.
+    /// Turns every hue round the colour wheel, degrees: `-180` to `180`. HDR only.
     pub hue_deg: f32,
-    /// 1 as drawn, 0 grey, above 1 stronger colours: `0` to `4`.
+    /// 1 as drawn, 0 grey, above 1 stronger colours: `0` to `4`. HDR only.
     pub saturation: f32,
-    /// 1 as drawn, below 1 toward grey, above 1 away from it: `0` to `4`.
+    /// 1 as drawn, below 1 toward grey, above 1 away from it: `0` to `4`. It pivots on 0.5 of the linear picture,
+    /// before the `exposure`: above 1 it blackens a dark scene that the exposure lifts. HDR only.
     pub contrast: f32,
-    /// A fixed lift of the dark end (the offset of the ASC CDL): `-1` to `1`, 0 none.
+    /// A fixed lift of the dark end (the offset of the ASC CDL): `-1` to `1`, 0 none. HDR only.
     pub lift: f32,
-    /// The curve of the light (the power of the ASC CDL): `0.05` to `4`, 1 none.
+    /// The curve of the light (the power of the ASC CDL): `0.05` to `4`, 1 none. HDR only.
     pub gamma: f32,
-    /// A multiplier of the light (the slope of the ASC CDL): `0` to `8`, 1 none.
+    /// A multiplier of the light (the slope of the ASC CDL): `0` to `8`, 1 none. HDR only.
     pub gain: f32,
 }
 
@@ -88,6 +106,17 @@ impl Grading {
             .collect()
     }
 
+    /// The fields of this grade that only a camera drawing in HDR shows (every one but `exposure` that is not
+    /// neutral), by name. Without HDR, Bevy grades in each material's shader and applies the exposure alone.
+    pub fn hdr_only(&self) -> Vec<&'static str> {
+        self.fields()
+            .into_iter()
+            .zip(Self::default().fields())
+            .filter(|((name, value, ..), (_, neutral, ..))| *name != "exposure" && value != neutral)
+            .map(|((name, ..), _)| name)
+            .collect()
+    }
+
     /// Whether this grade changes nothing.
     pub fn is_neutral(&self) -> bool {
         *self == Self::default()
@@ -117,7 +146,7 @@ pub const MAX_BLEND_S: f32 = 60.0;
 /// ids to definitions).
 ///
 /// ```ron
-/// { "rust": (blend_s: 1.5, grading: (temperature: 0.35, saturation: 0.7)) }
+/// { "rust": (blend_s: 1.5, grading: (temperature: 0.03, saturation: 0.7)) }
 /// ```
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(default, deny_unknown_fields)]
@@ -294,6 +323,25 @@ pub(super) fn plugin(app: &mut App) {
         .add_systems(FixedLast, track_volumes);
     #[cfg(feature = "render")]
     app.add_systems(Update, render::apply_grading);
+}
+
+/// Whether the world cameras (3D, with a [`ThirdPersonCamera`](super::ThirdPersonCamera) or a
+/// [`FirstPersonCamera`](super::FirstPersonCamera)) draw a grade in full: `Some(true)` when every one draws in HDR,
+/// `Some(false)` when one does not (it draws only the grade's `exposure`, [`Grading::hdr_only`]), `None` without such
+/// a camera or without the picture (a headless build).
+pub fn grade_drawn_in_full(world: &mut World) -> Option<bool> {
+    #[cfg(feature = "render")]
+    {
+        use bevy::camera::{Camera3d, Hdr};
+        let mut cameras =
+            world.query_filtered::<Has<Hdr>, (With<Camera3d>, Or<(With<super::ThirdPersonCamera>, With<super::FirstPersonCamera>)>)>();
+        cameras.iter(world).fold(None, |all, hdr| Some(all.unwrap_or(true) && hdr))
+    }
+    #[cfg(not(feature = "render"))]
+    {
+        let _ = world;
+        None
+    }
 }
 
 #[cfg(feature = "render")]
@@ -511,6 +559,14 @@ mod tests {
         let read: GradingDef = ron::from_str("(blend_s: 1.5, grading: (temperature: 0.35, saturation: 0.7))").unwrap();
         assert_eq!((read.blend_s, read.grading.temperature, read.grading.contrast), (1.5, 0.35, 1.0), "a field left out is the neutral one");
         assert!(ron::from_str::<GradingDef>("(blend: 1.0)").is_err(), "an unknown field is an error");
+    }
+
+    #[test]
+    fn every_field_but_the_exposure_is_drawn_only_in_hdr() {
+        assert!(Grading::default().hdr_only().is_empty());
+        assert!(Grading { exposure: 1.7, ..default() }.hdr_only().is_empty(), "an exposure is drawn by every camera");
+        let grade = Grading { exposure: 1.7, temperature: 0.03, contrast: 1.2, gain: 1.1, ..default() };
+        assert_eq!(grade.hdr_only(), ["temperature", "contrast", "gain"]);
     }
 
     #[test]

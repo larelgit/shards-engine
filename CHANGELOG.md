@@ -403,6 +403,16 @@ Changes that land in the main branch after phases C–E (`0.4.0`) go here.
   and the timing `field_timing` (`#[ignore]`) in `physics/world.rs`.
 
 ### Fixed
+- Colour grading said every field of a grade is drawn; Bevy draws only a grade's `exposure` on a camera that does not draw
+  in HDR (it grades in each material's shader there), and the rest (`temperature`, `tint`, `hue_deg`, `saturation`,
+  `contrast`, `lift`, `gamma`, `gain`) only in HDR, in its tone mapping pass. A grade tuned without HDR therefore changed
+  when a `picture.bloom` put the camera in HDR: a game's tunnels went black with red in them. Nothing is drawn
+  differently; the docs (`Grading`, `PictureTuning::grading`, the manual's "Colour grading") say so now, give
+  `temperature` and `tint` their real scale (an offset to the CIE 1931 white point: 0.02 to 0.05 is a clear cast, the old
+  examples' 0.35 takes the white point off the diagram) and say that `contrast` pivots on 0.5 of the linear picture before
+  the exposure (a dark scene that the grade's exposure lifts goes black under a contrast above 1). The `lights` query's
+  grading lines add `drawn: all of it (the camera draws in HDR)` or `drawn: its exposure alone; ...` with the fields left
+  out; `Grading::hdr_only` and `shards_motion::camera::grade_drawn_in_full`. An offscreen test pins Bevy's behaviour.
 - A replay with a pause menu in it plays through (the manual's "Replays"). The menu takes effect after its frame's time is
   counted, so the session may run that frame's tick under it and record the calls made in the menu one tick after the
   call that opened it; played back, the opening call came inside a tick and paused the clock, which then never reached
