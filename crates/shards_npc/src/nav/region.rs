@@ -191,6 +191,34 @@ pub(crate) struct TileGraph {
     pub edges: Vec<(u32, u32)>,
 }
 
+/// The costs inside one instance between its graph nodes, as the last graph build measured them
+/// ([`NavRegion::build_graph`]). They are a function of the instance's bake, its switched-off
+/// nodes and which of its nodes are graph nodes, so an instance that a change left alone keeps
+/// them, and only the instances it touched are measured again: a door that comes to rest
+/// re-measures the chunks round its doorway, not every chunk of the levels.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct InstanceCosts {
+    /// The bake they were measured on.
+    nav: Option<Arc<NavTile>>,
+    /// The node each of the instance's graph nodes measures from, in `TileGraph::of_instance`
+    /// order.
+    keys: Vec<Option<NodeId>>,
+    /// The instance's switched-off nodes then.
+    disabled: Vec<bool>,
+    /// `(from, to, cost)`: indices into `keys`.
+    edges: Vec<(u32, u32, u32)>,
+}
+
+impl InstanceCosts {
+    /// Whether these are the costs of `instance` with `keys` (graph node ids into `nodes`).
+    fn hold(&self, instance: &Instance, keys: &[u32], nodes: &[GraphNode]) -> bool {
+        self.nav.as_ref().is_some_and(|nav| Arc::ptr_eq(nav, &instance.nav))
+            && self.disabled == instance.disabled
+            && self.keys.len() == keys.len()
+            && self.keys.iter().zip(keys).all(|(kept, &k)| *kept == nodes[k as usize].node)
+    }
+}
+
 /// What a build did, for the journal and the tools.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct NavReport {
@@ -430,6 +458,9 @@ pub struct NavRegion {
     pub(crate) extras: Vec<Extra>,
     pub navlinks: Vec<NavLinkUse>,
     pub(crate) graph: TileGraph,
+    /// The costs inside each instance that the last graph build measured, by instance: what the
+    /// next build keeps where nothing changed (see [`InstanceCosts`]).
+    pub(crate) costs: Vec<InstanceCosts>,
     /// Which nodes reach which (links taken both ways, switched-off nodes left out): a label
     /// per node.
     components: Vec<u32>,
@@ -875,8 +906,17 @@ pub fn refresh(world: &mut World) {
             class.build_graph();
         }
     };
-    carve(&mut nav);
-    nav.bodies.iter_mut().for_each(carve);
+    // Every class at once on the compute pool, as a build makes them: each is a pure function of
+    // its own navmesh and the solids standing, so the order the tasks finish in changes nothing.
+    let mut bodies = std::mem::take(&mut nav.bodies);
+    let carve = &carve;
+    bevy::tasks::ComputeTaskPool::get_or_init(bevy::tasks::TaskPool::default).scope(|scope| {
+        scope.spawn(async { carve(&mut nav) });
+        for class in &mut bodies {
+            scope.spawn(async move { carve(class) });
+        }
+    });
+    nav.bodies = bodies;
     world.insert_resource(nav);
     // A solid the levels' chunks were baked from went or moved: they are baked again.
     if world.get_resource::<ActiveRegion>().is_none() && !world.get_resource::<NavRegion>().is_some_and(|nav| levels::current(world, nav)) {
@@ -979,6 +1019,7 @@ fn build(world: &mut World, settings: &NavSettings, prebaked: Option<(Prebaked, 
         extras: Vec::new(),
         navlinks: Vec::new(),
         graph: TileGraph::default(),
+        costs: Vec::new(),
         components: Vec::new(),
         report,
         voxel: None,
@@ -1575,26 +1616,39 @@ impl NavRegion {
         }
         let mut edges: Vec<(u32, u32, u32)> = Vec::new();
         // Inside each instance: the bake's costs, or measured again where it is carved or has
-        // navlink or hop ends.
+        // navlink or hop ends; kept from the last build where none of that changed.
+        let mut costs = std::mem::take(&mut self.costs);
+        costs.resize_with(self.instances.len(), InstanceCosts::default);
         for (inst, instance) in self.instances.iter().enumerate() {
             let keys = &graph.of_instance[inst];
-            let plain = instance.disabled.is_empty() && keys.len() == instance.nav.portals.len();
-            for &a in keys {
-                let Some(from) = graph.nodes[a as usize].node else { continue };
-                let dist = if plain { None } else { Some(dijkstra(&instance.nav, from - self.base[inst], Some(&instance.disabled))) };
-                for &b in keys {
-                    let Some(to) = graph.nodes[b as usize].node.filter(|_| a != b) else { continue };
-                    let cost = match (&dist, graph.nodes[a as usize].portal, graph.nodes[b as usize].portal) {
-                        (None, Some(p), Some(q)) => instance.nav.portal_cost(p as usize, q as usize),
-                        (Some(dist), ..) => Some(dist[(to - self.base[inst]) as usize]).filter(|c| *c != u32::MAX),
-                        _ => None,
-                    };
-                    if let Some(cost) = cost {
-                        edges.push((a, b, cost));
+            let kept = &mut costs[inst];
+            if !kept.hold(instance, keys, &graph.nodes) {
+                *kept = InstanceCosts {
+                    nav: Some(instance.nav.clone()),
+                    keys: keys.iter().map(|&k| graph.nodes[k as usize].node).collect(),
+                    disabled: instance.disabled.clone(),
+                    edges: Vec::new(),
+                };
+                let plain = instance.disabled.is_empty() && keys.len() == instance.nav.portals.len();
+                for (i, &a) in keys.iter().enumerate() {
+                    let Some(from) = graph.nodes[a as usize].node else { continue };
+                    let dist = if plain { None } else { Some(dijkstra(&instance.nav, from - self.base[inst], Some(&instance.disabled))) };
+                    for (j, &b) in keys.iter().enumerate() {
+                        let Some(to) = graph.nodes[b as usize].node.filter(|_| a != b) else { continue };
+                        let cost = match (&dist, graph.nodes[a as usize].portal, graph.nodes[b as usize].portal) {
+                            (None, Some(p), Some(q)) => instance.nav.portal_cost(p as usize, q as usize),
+                            (Some(dist), ..) => Some(dist[(to - self.base[inst]) as usize]).filter(|c| *c != u32::MAX),
+                            _ => None,
+                        };
+                        if let Some(cost) = cost {
+                            kept.edges.push((i as u32, j as u32, cost));
+                        }
                     }
                 }
             }
+            edges.extend(kept.edges.iter().map(|&(i, j, cost)| (keys[i as usize], keys[j as usize], cost)));
         }
+        self.costs = costs;
         // Across tiles: a stitch joins the portals of the two sides; a navlink, a hop or a diagonal its
         // two ends.
         for extra in &self.extras {
@@ -1607,16 +1661,7 @@ impl NavRegion {
                 edges.push((a, b, extra.cost));
             }
         }
-        edges.sort_unstable();
-        edges.dedup_by_key(|e| (e.0, e.1));
-        graph.first = vec![0; graph.nodes.len() + 1];
-        for &(a, ..) in &edges {
-            graph.first[a as usize + 1] += 1;
-        }
-        for n in 0..graph.nodes.len() {
-            graph.first[n + 1] += graph.first[n];
-        }
-        graph.edges = edges.into_iter().map(|(_, b, c)| (b, c)).collect();
+        (graph.first, graph.edges) = adjacency(graph.nodes.len(), &edges);
         self.graph = graph;
         self.find_components();
     }
@@ -1689,6 +1734,41 @@ impl NavRegion {
     }
 }
 
+/// The graph's edges in compressed rows from `(from, to, cost)` triples in any order: the edges
+/// leaving node `n` are `edges[first[n]..first[n + 1]]`, by `to`, and of two between the same
+/// nodes the cheaper one. Each node's row is sorted on its own (a few dozen edges), which is what
+/// sorting every triple at once comes to, at a fraction of its cost.
+fn adjacency(nodes: usize, triples: &[(u32, u32, u32)]) -> (Vec<u32>, Vec<(u32, u32)>) {
+    let mut start = vec![0u32; nodes + 1];
+    for &(a, ..) in triples {
+        start[a as usize + 1] += 1;
+    }
+    for n in 0..nodes {
+        start[n + 1] += start[n];
+    }
+    let mut rows = vec![(0u32, 0u32); triples.len()];
+    let mut next = start.clone();
+    for &(a, b, cost) in triples {
+        rows[next[a as usize] as usize] = (b, cost);
+        next[a as usize] += 1;
+    }
+    let mut first = Vec::with_capacity(nodes + 1);
+    let mut edges: Vec<(u32, u32)> = Vec::with_capacity(triples.len());
+    first.push(0);
+    for n in 0..nodes {
+        let row = &mut rows[start[n] as usize..start[n + 1] as usize];
+        row.sort_unstable();
+        let begin = edges.len();
+        for &(b, cost) in row.iter() {
+            if edges.len() == begin || edges[edges.len() - 1].0 != b {
+                edges.push((b, cost));
+            }
+        }
+        first.push(edges.len() as u32);
+    }
+    (first, edges)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1739,6 +1819,30 @@ mod tests {
         assert_eq!(inst.to_global(0, 0), [10 + 5, 20]);
     }
 
+    /// The rows sorted node by node are what sorting every edge at once made: each node's edges by
+    /// `to`, and of two between the same nodes the cheaper, with empty rows where a node has none.
+    #[test]
+    fn rows_sorted_one_by_one_are_every_edge_sorted_at_once() {
+        let mut seed: u32 = 12_345;
+        let mut next = |below: u32| {
+            seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+            (seed >> 8) % below
+        };
+        let triples: Vec<(u32, u32, u32)> = (0..5000).map(|_| (next(97), next(97), next(50))).collect();
+        let mut all = triples.clone();
+        all.sort_unstable();
+        all.dedup_by_key(|e| (e.0, e.1));
+        let mut first = vec![0u32; 101];
+        for &(a, ..) in &all {
+            first[a as usize + 1] += 1;
+        }
+        for n in 0..100 {
+            first[n + 1] += first[n];
+        }
+        let edges: Vec<(u32, u32)> = all.iter().map(|&(_, b, cost)| (b, cost)).collect();
+        assert_eq!(adjacency(100, &triples), (first, edges));
+    }
+
     /// The navmesh of body class `body`, baked for `agent`, with nothing in it: what choosing
     /// a class looks at.
     fn class(body: &str, agent: CharacterParams) -> NavRegion {
@@ -1762,6 +1866,7 @@ mod tests {
             extras: Vec::new(),
             navlinks: Vec::new(),
             graph: TileGraph::default(),
+            costs: Vec::new(),
             components: Vec::new(),
             report: NavReport::default(),
             voxel: None,

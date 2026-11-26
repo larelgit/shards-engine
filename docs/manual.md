@@ -3922,7 +3922,11 @@ that does not say so keeps the local grid, so a game that changes nothing plays 
 - **Kept up to date.** The navmesh is made again when a level is placed, taken away or loaded again, and when
   content changes. A baked solid that goes or moves (the game took a wall away) makes it again too, and only the
   chunks it stood in are baked. Making it again places, carves and stitches every chunk, for every body class at once
-  on the compute pool: about 0.1 s for 50 chunks, so give what goes in play `Health` or make it a mover.
+  on the compute pool: about 0.1 s for 50 chunks, so give what goes in play `Health` or make it a mover. Carving
+  is far cheaper: a mover that starts or stops, or a solid that comes or goes, decides again only the nodes and the
+  links near it, and the graph keeps the costs inside every chunk it did not touch, for every class at once on the
+  compute pool (about 9 ms a door on 44 chunks and four classes, where it was 200 ms when every chunk was measured
+  again).
 - **Body classes and `safe_drop`** come from the `nav` settings, as for a region. An NPC routes on the tightest class
   that serves its body; one no class serves, or one that stands outside the levels that have a navmesh, plans on the
   local grid (`npc_state` says which: `navmesh, body agent`, or `local grid: …`).
