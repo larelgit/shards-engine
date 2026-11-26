@@ -129,6 +129,36 @@ fn the_nearest_lights_that_ask_for_a_shadow_get_one() {
 }
 
 #[test]
+fn a_budget_in_views_counts_a_point_light_as_six_and_a_spot_as_one() {
+    // `Lamp.A` (a point, 1 m) and `Lamp.D` (the spot, 3 m) ask for a shadow.
+    let (_assets, mut app) = room("views");
+    app.world_mut().resource_mut::<GraphicsSettings>().shadow_views = 6;
+    assert_eq!(casting(&mut app), ["Lamp.A"], "the nearer point takes all six views");
+    let said = ok(&mut app, "lights", json!({}));
+    assert!(said.contains("2 want a shadow, 1 cast one (budget 6 views, 6 taken: graphics.shadow_views"), "{said}");
+    assert!(line(&said, "Lamp.A").contains("shadow: yes (6 views)"), "{said}");
+    assert!(line(&said, "Lamp.D").contains("shadow: no (over the budget: it takes 1 view, 0 of 6 left after the nearer lights)"), "{said}");
+    assert_eq!((status(&app)["budget"].clone(), status(&app)["budget_views"].clone(), status(&app)["views_used"].clone()), (json!(6), json!(true), json!(6)));
+
+    // Five views: the point does not fit, the spot behind it does. `shadow_lights` is not read while views are set.
+    let mut graphics = app.world_mut().resource_mut::<GraphicsSettings>();
+    (graphics.shadow_views, graphics.shadow_lights) = (5, 0);
+    assert_eq!(casting(&mut app), ["Lamp.D"]);
+    let said = ok(&mut app, "lights", json!({}));
+    assert!(line(&said, "Lamp.A").contains("it takes 6 views, 5 of 5 left"), "{said}");
+    assert!(said.contains("budget 5 views, 1 taken"), "{said}");
+    app.world_mut().resource_mut::<GraphicsSettings>().shadow_views = 7;
+    assert_eq!(casting(&mut app), ["Lamp.A", "Lamp.D"]);
+
+    // Back to 0: lights are counted again, and the line reads as it always did.
+    *app.world_mut().resource_mut::<GraphicsSettings>() = GraphicsSettings { shadow_lights: 1, ..default() };
+    assert_eq!(casting(&mut app), ["Lamp.A"]);
+    let said = ok(&mut app, "lights", json!({}));
+    assert!(said.contains("(budget 1: graphics.shadow_lights)") && line(&said, "Lamp.A").ends_with("shadow: yes"), "{said}");
+    assert!(status(&app).get("budget_views").is_none());
+}
+
+#[test]
 fn a_light_without_a_definition_is_named_and_draws_nothing() {
     let (_assets, mut app) = room("ghost");
     light(&mut app, "ghost", "Lamp.X", Vec3::new(9.0, 2.0, 0.0));

@@ -10,14 +10,15 @@ use shards_content::ContentDb;
 use shards_motion::camera::{picture_clock, CameraTuning, Grading, GradingBlend, GradingDef};
 use shards_settings::FlashLevel;
 
-use crate::{update_state, Flicker, LightDef, LightInfo, LightState};
+use crate::{update_state, Flicker, LightDef, LightInfo, LightState, ShadowBudget};
 
 pub(crate) fn register(world: &mut World) {
     register_tool(world, "lights", Scope::Player, ToolKind::Query, lights);
 }
 
 /// What the picture's lights and colour grade are doing now: the content lights by kind, who flickers and how bright
-/// each is at this moment, who casts a shadow and why the others do not, and the grade the camera shows with the
+/// each is at this moment, who casts a shadow and why the others do not (against `graphics.shadow_lights`, or against
+/// `graphics.shadow_views` when it is set: a point light takes 6 views, a spot 1), and the grade the camera shows with the
 /// progress of its blend toward or away from a grading volume. Pictures only: it is the same headless, from the
 /// simulation's clock.
 #[derive(Deserialize, JsonSchema, Default)]
@@ -45,12 +46,41 @@ fn flicker_text(light: &LightInfo, def: &LightDef) -> String {
     }
 }
 
-fn shadow_text(light: &LightInfo, state: &LightState) -> &'static str {
-    match (light.wants_shadow, light.casts) {
-        (true, true) => "shadow: yes",
-        (true, false) if state.budget == 0 => "shadow: no (budget 0)",
-        (true, false) => "shadow: no (over the budget)",
-        (false, _) => "shadow: not asked",
+fn shadow_text(light: &LightInfo, state: &LightState) -> String {
+    match (light.wants_shadow, light.casts, state.budget) {
+        (true, true, ShadowBudget::Lights(_)) => "shadow: yes".to_owned(),
+        (true, true, ShadowBudget::Views(_)) => format!("shadow: yes ({} {})", light.shadow_views(), views_word(light.shadow_views())),
+        (true, false, budget) if budget.amount() == 0 => "shadow: no (budget 0)".to_owned(),
+        (true, false, ShadowBudget::Lights(_)) => "shadow: no (over the budget)".to_owned(),
+        // Nearer lights took the views; this one did not fit in what they left (a farther spot may have).
+        (true, false, ShadowBudget::Views(n)) => format!(
+            "shadow: no (over the budget: it takes {} {}, {} of {n} left after the nearer lights)",
+            light.shadow_views(),
+            views_word(light.shadow_views()),
+            left_before(light, state, n),
+        ),
+        (false, ..) => "shadow: not asked".to_owned(),
+    }
+}
+
+fn views_word(n: usize) -> &'static str {
+    if n == 1 { "view" } else { "views" }
+}
+
+/// The views the casters nearer than `light` left of `budget`: what it did not fit in.
+fn left_before(light: &LightInfo, state: &LightState, budget: usize) -> usize {
+    let me = light.distance.unwrap_or(0.0);
+    let nearer: usize = state.casting().filter(|l| l.distance.unwrap_or(0.0) <= me).map(LightInfo::shadow_views).sum();
+    budget.saturating_sub(nearer)
+}
+
+/// The budget on the head line: as it always read for a budget of lights, with the views taken for one of views.
+fn budget_text(state: &LightState) -> String {
+    match state.budget {
+        ShadowBudget::Lights(n) => format!("budget {n}: graphics.shadow_lights"),
+        ShadowBudget::Views(n) => {
+            format!("budget {n} views, {} taken: graphics.shadow_views, a point light takes 6 and a spot 1", state.views_used)
+        }
     }
 }
 
@@ -124,11 +154,11 @@ fn lights(In(call): In<Call<LightsArgs>>, world: &mut World) -> ToolResult {
         kinds.push_str(&format!(", without a definition {undefined}"));
     }
     let mut out = vec![format!(
-        "lights: {} ({kinds}) · {} flicker · {wanting} want a shadow, {} cast one (budget {}: graphics.shadow_lights) · clock {:.3} s",
+        "lights: {} ({kinds}) · {} flicker · {wanting} want a shadow, {} cast one ({}) · clock {:.3} s",
         state.lights.len(),
         state.flickering().count(),
         state.casting().count(),
-        state.budget,
+        budget_text(state),
         state.clock,
     )];
     out.push(match state.viewer {

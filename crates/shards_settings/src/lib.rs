@@ -56,7 +56,7 @@ use serde_json::{json, Value};
 use shards_core::EngineAppExt;
 
 pub use bevy::settings::SettingsGroup;
-pub use groups::{AccessibilitySettings, AudioSettings, ControlSettings, FlashLevel, GraphicsSettings, ShadowQuality};
+pub use groups::{AccessibilitySettings, AudioSettings, ControlSettings, FlashLevel, GraphicsSettings, ShadowBudget, ShadowQuality};
 pub use registry::{watch_settings, SettingsAppExt, SettingsChanged, SettingsRegistry};
 pub use file::{stored_entries, watch_store};
 pub use store::{flush, flush_checked, install, save_soon, save_soon_in, Installed, SettingsAppId, SettingsStorage};
