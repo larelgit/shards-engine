@@ -66,6 +66,26 @@ git push origin v0.1.0
 Changes that land in the main branch after phases C–E (`0.4.0`) go here.
 
 ### Added
+- Ambient occlusion in the camera's picture (the manual's "The picture"): `picture.ssao: Some((quality, radius, thickness))`
+  in the `camera` content gives the world cameras Bevy's `ScreenSpaceAmbientOcclusion` (`SsaoTuning`, `SsaoQuality::{Low,
+  Medium, High, Ultra}`), with the depth and normal prepasses it needs and `Msaa::Off` while it is on (Bevy draws no SSAO
+  under MSAA); taking it out gives the camera back its own SSAO, MSAA and prepasses. The view model's camera follows the
+  world camera's MSAA and has no SSAO. Off by default.
+- A shadow budget in views (the manual's "Lights and colour grading (F13)"): `graphics.shadow_views` (0 to 384, default 0)
+  counts the shadow budget in shadow views, a point light 6 and a spot 1, the nearest first, and replaces
+  `graphics.shadow_lights` while above 0. The `lights` query says the budget in views, how many are taken and, for a light
+  that missed out, what it takes and what was left; `ai/status` adds `light.budget_views` and `light.views_used`.
+  `GraphicsSettings::shadow_budget` and `ShadowBudget::{Lights, Views}`. At 0 nothing changes.
+- Baked light for levels (the manual's "Levels from Blender (E4.2)", "Baked light"): level node properties `lightmap`,
+  `lightmap_rect`, `irradiance_volume`, `reflection_probe` and `probe_falloff`, and the picture-only content kind
+  `baked_light` (`BakedLightDef { sets, set, lightmap_exposure, irradiance_intensity, reflection_intensity, bicubic }`, one
+  per level id) that names the folders of the level's sets of baked images. A drawn level puts Bevy's `Lightmap` on the
+  meshes (by their second UV map; the check names a mesh without one and every file a set lacks) and a `LightProbe` with an
+  `IrradianceVolume` and/or an `EnvironmentMapLight` on the probe boxes; lightmapped meshes still take every dynamic light.
+  A game switches a level's set at run time with `shards::level::select_baked_set` (the resource `BakedLight`, the
+  picture's, in no snapshot); the tools `baked_light` (player) and `baked_light_set` (dev). A content light's new
+  `baked: true` lights no lightmapped mesh's diffuse (its light is in the bake). A level without a `baked_light` draws as
+  before.
 - The game's own subtitle lines (the manual's "Subtitles"): `shards::audio::subtitles::say(world, Saying { sound, text,
   speaker, secs, bus })` shows a line that no voice says, for the seconds the game gives, on the clock of the bus it names
   (the simulation's, so a pause holds it; real time on `Ui`): words the game puts together, such as a tablet's new task as
