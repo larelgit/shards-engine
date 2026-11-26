@@ -432,6 +432,7 @@ pub(super) fn build(world: &mut World, settings: &NavSettings, cut: Cut, prebake
         extras: Vec::new(),
         navlinks: Vec::new(),
         graph: TileGraph::default(),
+        costs: Vec::new(),
         components: Vec::new(),
         report,
         voxel: None,

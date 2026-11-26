@@ -474,6 +474,7 @@ fn assemble(physics: &PhysicsWorld, settings: &NavSettings, source: &Source, com
         extras: Vec::new(),
         navlinks: Vec::new(),
         graph: TileGraph::default(),
+        costs: Vec::new(),
         components: Vec::new(),
         report,
         voxel: None,

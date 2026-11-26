@@ -538,6 +538,57 @@ fn carving_is_the_solids_standing_now_not_their_history() {
     }
 }
 
+/// Routes on a navmesh carved again and again are the routes of one built around the solids
+/// standing now: the costs inside the tiles a change left alone are kept from the build before,
+/// and those of the tiles it touched are measured again. Wall `a` shuts the north-east tile's
+/// way from its west side to its south side and stays clear of both sides' middles (where the
+/// tile graph measures from), so only a cost measured again sends the route round by the
+/// south-west tile.
+#[test]
+fn a_navmesh_carved_again_routes_as_one_built_now() {
+    let rows = ["floor floor", "floor floor"];
+    let a = (Vec3::new(8.0, 0.0, 5.5), Vec3::new(16.0, 2.5, 6.0));
+    let b = (Vec3::new(2.0, 0.0, 10.0), Vec3::new(3.0, 2.5, 11.0));
+    let c = (Vec3::new(13.0, 0.0, 13.0), Vec3::new(14.0, 2.5, 14.0));
+    let pairs = [
+        (Vec3::new(6.0, 0.0, 2.0), Vec3::new(14.0, 0.0, 10.0)),
+        (Vec3::new(2.0, 0.0, 6.0), Vec3::new(13.0, 0.0, 3.0)),
+        (Vec3::new(14.0, 0.0, 14.0), Vec3::new(12.0, 0.0, 2.0)),
+        (Vec3::new(3.0, 0.0, 13.0), Vec3::new(10.0, 0.0, 7.0)),
+        (Vec3::new(1.0, 0.0, 1.0), Vec3::new(15.0, 0.0, 15.0)),
+    ];
+    // Lengths to the millimetre and the tiles crossed, or why there is no route.
+    type Routes = Vec<Result<(i64, Vec<[i32; 2]>), String>>;
+    let routes = |app: &App| -> Routes {
+        pairs.iter().map(|(from, to)| route(app, *from, *to).map(|p| ((p.length * 1000.0).round() as i64, p.tiles))).collect()
+    };
+    // The routes of the region built with `walls` standing from the start.
+    let built_with = |walls: &[(Vec3, Vec3)]| {
+        let mut fresh = app();
+        for (min, max) in walls {
+            wall(fresh.world_mut(), *min, *max);
+        }
+        load_region(&mut fresh, &rows);
+        routes(&fresh)
+    };
+    assert_ne!(built_with(&[a]), built_with(&[]), "wall a changes a route");
+    let mut carved = app();
+    load_region(&mut carved, &rows);
+    assert_eq!(routes(&carved), built_with(&[]), "as built");
+    let wa = wall(carved.world_mut(), a.0, a.1);
+    step(&mut carved, 1);
+    assert_eq!(routes(&carved), built_with(&[a]), "a put up");
+    wall(carved.world_mut(), b.0, b.1);
+    step(&mut carved, 1);
+    assert_eq!(routes(&carved), built_with(&[a, b]), "b put up");
+    carved.world_mut().despawn(wa);
+    step(&mut carved, 1);
+    assert_eq!(routes(&carved), built_with(&[b]), "a taken down");
+    wall(carved.world_mut(), c.0, c.1);
+    step(&mut carved, 1);
+    assert_eq!(routes(&carved), built_with(&[b, c]), "c put up");
+}
+
 /// A solid that moves (it keeps its collider id) is carved where it stands now.
 #[test]
 fn a_solid_that_moves_is_carved_where_it_stands() {
