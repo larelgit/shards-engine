@@ -63,6 +63,8 @@
 //! | `mover` | text | the node becomes a [`Mover`](shards_motion::Mover) going through the keys of that `mover` definition (F6); the nodes below it move with it as its [`MoverPart`](shards_motion::MoverPart)s, and its picture follows it; movers do not nest |
 //! | `light` | text | the node shines by that `light` definition ([`ContentLight`](shards_light::ContentLight), F13): a Blender lamp, whose own glTF light the picture drops for it, or an empty; a spot points along the node's -Z |
 //! | `grading` | text | on a `marker` = `trigger` node: the picture blends toward that `grading` definition ([`GradingVolume`](shards_motion::camera::GradingVolume)) while the local player is inside |
+//! | `lightmap`, `lightmap_rect` | a file name; `[x0, y0, x1, y1]` | baked light (the picture's, [`BakedNode`]): the mesh draws that lightmap of the level's baked set (a `baked_light` definition, [`BakedLightDef`]) by its second UV map, over that part of the image |
+//! | `irradiance_volume`, `reflection_probe`, `probe_falloff` | a file name; a name; `[x, y, z]` or a number | baked light: the node is a light probe box (the unit cube under its transform) with that irradiance volume and/or reflection cube maps, fading that far in from its sides |
 //!
 //! Every other key is a **component**: its short name (`Health`) or full type path
 //! (`my_game::combat::Health`), and its value as JSON in the shape `inspect` and the `get`
@@ -156,6 +158,7 @@
 //! gameplay entities are the same with and without it.
 
 mod asset;
+mod baked;
 mod def;
 mod library;
 mod marker;
@@ -171,6 +174,7 @@ use shards_content::{ContentAppExt, ContentPlugin};
 use shards_core::EngineAppExt;
 
 pub use asset::{Bounds, LevelAsset, LevelLoadError, LevelLoader, LevelNode, MarkerInfo};
+pub use baked::{baked_nodes, reflection_files, select_baked_set, BakedLight, BakedLightArgs, BakedLightDef, BakedLightSetArgs, BakedNode};
 pub use def::LevelDef;
 pub use library::{held_change, level_asset, request_level, LevelLibrary};
 pub use marker::{LevelMarker, MarkerKind, RequiredMarker};
@@ -212,6 +216,9 @@ impl Plugin for LevelPlugin {
             .register_type::<MarkerKind>()
             .register_type::<FromLevel>()
             .add_content::<LevelDef>()
+            // Baked light (lightmaps, light probes) of a level's picture: a kind the simulation never reads.
+            .add_content::<BakedLightDef>()
+            .init_resource::<BakedLight>()
             .init_resource::<LevelLibrary>()
             .init_resource::<LevelInstances>()
             // The levels placed by id are (`PlacedLevels`): the snapshot's go back where it
@@ -245,6 +252,9 @@ impl Plugin for LevelPlugin {
             );
         #[cfg(feature = "render")]
         render::plugin(app);
+        #[cfg(feature = "render")]
+        baked::render_plugin(app);
         tools::register(app.world_mut());
+        baked::register(app.world_mut());
     }
 }

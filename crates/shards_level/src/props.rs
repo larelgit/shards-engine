@@ -27,11 +27,12 @@ use shards_light::LightDef;
 use shards_motion::camera::GradingDef;
 use shards_motion::{CollisionLayers, LayerMask, MoverDef, VolumeKind, PROBE_RANGE};
 
-use crate::asset::{json_kind, LevelAsset, LevelNode};
+use crate::asset::{check_relative, json_kind, LevelAsset, LevelNode};
+use crate::baked::BakedNode;
 use crate::marker::{MarkerKind, RequiredMarker};
 
 /// The level properties, in documentation order.
-pub const PROPERTIES: [&str; 22] = [
+pub const PROPERTIES: [&str; 27] = [
     "marker",
     "name",
     "socket",
@@ -54,7 +55,15 @@ pub const PROPERTIES: [&str; 22] = [
     "hold_s",
     "use_range",
     "prompt",
+    "lightmap",
+    "lightmap_rect",
+    "irradiance_volume",
+    "reflection_probe",
+    "probe_falloff",
 ];
+
+/// The level properties of baked light (the picture's, [`BakedNode`]): nothing spawns for them.
+pub(crate) const BAKED_PROPERTIES: [&str; 5] = ["lightmap", "lightmap_rect", "irradiance_volume", "reflection_probe", "probe_falloff"];
 
 /// Components the file cannot set: the engine owns them.
 const ENGINE_OWNED: [(&str, &str); 3] = [
@@ -520,6 +529,12 @@ pub(crate) fn plan_node(node: &LevelNode, position: usize, registry: &TypeRegist
         Err(e) => problems.push(e),
     }
 
+    // Baked light: the picture's (a `baked_light` definition says where its files are); the node spawns nothing for it.
+    if let Err(found) = baked_of(props) {
+        problems.extend(found);
+    }
+    used.extend(BAKED_PROPERTIES);
+
     for key in PROPERTIES {
         if props.contains_key(key) && !used.contains(&key) {
             problems.push(format!("`{key}` does nothing on this node: {}", why_unused(key)));
@@ -532,6 +547,70 @@ pub(crate) fn plan_node(node: &LevelNode, position: usize, registry: &TypeRegist
         true
     });
     (plan, problems)
+}
+
+/// What a node's properties say about baked light: `None` when it names none, the problems when they are wrong.
+pub(crate) fn baked_of(props: &Map<String, Value>) -> Result<Option<BakedNode>, Vec<String>> {
+    if !BAKED_PROPERTIES.iter().any(|k| props.contains_key(*k)) {
+        return Ok(None);
+    }
+    let mut node = BakedNode::default();
+    let mut problems = Vec::new();
+    let mut file = |key: &str| -> Option<String> {
+        match text(props, key) {
+            Ok(Some("")) => {
+                problems.push(format!("`{key}` is empty; name a file in the folders of the level's baked sets (a `baked_light` definition)"));
+                None
+            }
+            Ok(Some(name)) => match check_relative(name) {
+                Ok(()) => Some(name.to_owned()),
+                Err(_) => {
+                    problems.push(format!("`{key}` `{name}` must be a file name inside a baked set's folder (relative, no `..`)"));
+                    None
+                }
+            },
+            Ok(None) => None,
+            Err(e) => {
+                problems.push(e);
+                None
+            }
+        }
+    };
+    node.lightmap = file("lightmap");
+    node.irradiance_volume = file("irradiance_volume");
+    node.reflection_probe = file("reflection_probe");
+    if let Some(value) = props.get("lightmap_rect") {
+        let parts: Option<Vec<f32>> = value.as_array().filter(|a| a.len() == 4).and_then(|a| a.iter().map(|v| v.as_f64().map(|f| f as f32)).collect());
+        match parts.as_deref() {
+            Some(&[x0, y0, x1, y1]) if [x0, y0, x1, y1].iter().all(|v| (0.0..=1.0).contains(v)) && x0 < x1 && y0 < y1 => {
+                node.lightmap_rect = Rect::new(x0, y0, x1, y1);
+            }
+            _ => problems.push(format!(
+                "`lightmap_rect` must be [x0, y0, x1, y1] within 0 to 1 with x0 < x1 and y0 < y1 (the top left first), found {value}"
+            )),
+        }
+        if !props.contains_key("lightmap") {
+            problems.push("`lightmap_rect` does nothing without `lightmap`: it is the part of that image the mesh covers".to_owned());
+        }
+    }
+    if let Some(value) = props.get("probe_falloff") {
+        let as_f32 = |v: &Value| v.as_f64().map(|f| f as f32);
+        let read = match value {
+            Value::Array(items) if items.len() == 3 => {
+                let v: Option<Vec<f32>> = items.iter().map(as_f32).collect();
+                v.map(|v| Vec3::new(v[0], v[1], v[2]))
+            }
+            other => as_f32(other).map(Vec3::splat),
+        };
+        match read {
+            Some(v) if v.to_array().iter().all(|c| (0.0..=1.0).contains(c)) => node.probe_falloff = v,
+            _ => problems.push(format!("`probe_falloff` must be [x, y, z] or one number, each 0 to 1, found {value}")),
+        }
+        if !props.contains_key("irradiance_volume") && !props.contains_key("reflection_probe") {
+            problems.push("`probe_falloff` does nothing without `irradiance_volume` or `reflection_probe`: it is how a probe's box fades".to_owned());
+        }
+    }
+    if problems.is_empty() { Ok(Some(node)) } else { Err(problems) }
 }
 
 fn why_unused(key: &str) -> &'static str {

@@ -151,6 +151,7 @@ const OUTSIDE: &[(&str, &str)] = &[
     // shards_hitstop
     ("shards_hitstop::", "the hit stop log: what was held and why, never changing the world; the holds themselves are ai_core::hold's"),
     // shards_level
+    ("shards_level::baked::BakedLight", "the baked set each level draws: the picture's, which a game sets from its own saved state"),
     ("shards_level::library::LevelLibrary", "loaded level files: what the world is built around, which a snapshot check guards"),
     ("shards_level::spawn::LevelInstances", "the levels spawned, made again by the snapshot prepares `levels` and `placed levels`"),
     // shards_light

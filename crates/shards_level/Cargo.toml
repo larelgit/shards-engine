@@ -10,7 +10,7 @@ license.workspace = true
 [features]
 # The level's visual scene: the same file through Bevy's glTF loader, under one root entity.
 # Gameplay entities are the same with or without it.
-render = ["ai_core/render", "shards_motion/render", "bevy/bevy_gltf", "bevy/bevy_light", "bevy/bevy_world_serialization"]
+render = ["ai_core/render", "shards_motion/render", "bevy/bevy_gltf", "bevy/bevy_light", "bevy/bevy_pbr", "bevy/bevy_world_serialization"]
 
 [dependencies]
 ai_core.workspace = true
