@@ -10,7 +10,7 @@ license.workspace = true
 [features]
 # The third-person camera systems and the collider overlay (they need a window to be seen;
 # the pure camera math and the data types are always built).
-render = ["ai_core/render", "bevy/bevy_post_process", "bevy/bevy_light"]
+render = ["ai_core/render", "bevy/bevy_post_process", "bevy/bevy_light", "bevy/bevy_pbr", "bevy/bevy_core_pipeline"]
 # Real gamepads through gilrs (needs libudev). Without it `Gamepad` entities still work,
 # a game or a test just has to spawn them.
 gamepad = ["bevy/bevy_gilrs"]

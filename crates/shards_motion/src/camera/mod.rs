@@ -53,7 +53,7 @@ pub use first_person::{
 pub use grading::{picture_clock, Grading, GradingBlend, GradingDef, GradingVolume};
 #[cfg(feature = "render")]
 pub use grading::GradingSet;
-pub use picture::{BloomComposite, BloomTuning, PictureTuning, ToneMapping};
+pub use picture::{BloomComposite, BloomTuning, PictureTuning, SsaoQuality, SsaoTuning, ToneMapping};
 pub use tuning::{ArmTuning, AutoCentreTuning, CameraOffsets, CameraTuning, FitTuning, FlickTuning, FramingTuning, TraumaTuning};
 pub use shot::{ShotDef, ShotEnded, ShotKey, ShotPoint, ShotStarted, Shots};
 
