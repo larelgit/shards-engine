@@ -56,7 +56,10 @@ impl Plugin for FramesPlugin {
         // GPU time and triangles of every pass (timestamp and pipeline-statistics queries). A
         // build for players does without them.
         #[cfg(not(feature = "dist"))]
-        app.add_plugins(bevy::render::diagnostic::RenderDiagnosticsPlugin);
+        if !app.is_plugin_added::<bevy::render::diagnostic::RenderDiagnosticsPlugin>() {
+            // (With `trace_tracy` Bevy's render plugin has added it already, and a second one is a panic.)
+            app.add_plugins(bevy::render::diagnostic::RenderDiagnosticsPlugin);
+        }
         if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
             render_app
                 .insert_resource(renders)

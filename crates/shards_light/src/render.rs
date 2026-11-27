@@ -24,6 +24,34 @@ pub struct LightPicture {
 
 pub(crate) fn plugin(app: &mut App) {
     app.add_systems(Update, drive_pictures.after(crate::update_state).run_if(drawn));
+    // Without a GPU (a test, `--headless` with the feature on) there is no render world and nothing to clear.
+    if let Some(render_app) = app.get_sub_app_mut(bevy::render::RenderApp) {
+        render_app.add_systems(
+            bevy::render::Render,
+            drop_stale_shadow_views.in_set(bevy::render::RenderSystems::CreateViews).before(bevy::pbr::prepare_lights),
+        );
+    }
+}
+
+/// The render world, before Bevy prepares the lights: a point or spot light that is out of every view loses its
+/// shadow views.
+///
+/// Bevy 0.20 takes a light that left the views out of the lights it draws (`extract_lights` removes its
+/// `ExtractedPointLight`), but leaves its shadow views alive: `prepare_lights` despawns the views of a light whose
+/// shadow went only among the lights it still draws. Each of those views is a root view: the whole `Core3d` schedule
+/// runs for it every frame (about as long as for a view that draws a shadow), until the light is seen again. With a
+/// shadow budget that follows the player, every shadowed lamp left behind kept its views (a point light six of them):
+/// a walk through a level, or a teleport, drew many more views than the budget. Taking the component off despawns
+/// the views (Bevy's own observer on its removal), and a light seen again gets a new one with its
+/// `ExtractedPointLight`, which requires it. Every light's, a game's own Bevy lights included: the views are Bevy's.
+#[allow(clippy::type_complexity, reason = "a Bevy query filter")]
+fn drop_stale_shadow_views(
+    mut commands: Commands,
+    stale: Query<Entity, (With<bevy::pbr::PointAndSpotLightViewEntities>, Without<bevy::pbr::ExtractedPointLight>)>,
+) {
+    for light in &stale {
+        commands.entity(light).remove::<bevy::pbr::PointAndSpotLightViewEntities>();
+    }
 }
 
 /// The half angle of a spot's cone in radians, from the whole opening in degrees.
@@ -132,5 +160,66 @@ fn drive_pictures(
             }
             None => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use bevy::pbr::{ExtractedPointLight, PointAndSpotLightViewEntities};
+
+    use bevy::ecs::system::RunSystemOnce;
+
+    use super::*;
+
+    fn extracted() -> ExtractedPointLight {
+        ExtractedPointLight {
+            color: LinearRgba::WHITE,
+            intensity: 1.0,
+            range: 10.0,
+            radius: 0.0,
+            transform: GlobalTransform::IDENTITY,
+            shadow_maps_enabled: true,
+            contact_shadows_enabled: false,
+            shadow_depth_bias: 0.0,
+            shadow_normal_bias: 0.0,
+            shadow_map_near_z: 0.1,
+            spot_light_angles: None,
+            volumetric: false,
+            soft_shadows_enabled: false,
+            affects_lightmapped_mesh_diffuse: true,
+        }
+    }
+
+    /// A light with shadow views, as `prepare_lights` leaves one: the views are entities named in its component.
+    fn light_with_views(world: &mut World, views: usize, seen: bool) -> (Entity, Vec<Entity>) {
+        let made: Vec<Entity> = (0..views).map(|_| world.spawn_empty().id()).collect();
+        let mut of_light = PointAndSpotLightViewEntities::default();
+        of_light.extend(made.iter().copied());
+        let light = if seen { world.spawn((extracted(), of_light)).id() } else { world.spawn(of_light).id() };
+        (light, made)
+    }
+
+    #[test]
+    fn a_light_out_of_every_view_loses_its_shadow_views_and_a_light_in_view_keeps_them() {
+        let mut world = World::new();
+        // Bevy's own observer does the despawning; it is private, so the test has one that does the same.
+        world.add_observer(|gone: On<Remove<PointAndSpotLightViewEntities>>, lights: Query<&PointAndSpotLightViewEntities>, mut commands: Commands| {
+            if let Ok(views) = lights.get(gone.entity) {
+                for view in views.iter().copied() {
+                    commands.entity(view).despawn();
+                }
+            }
+        });
+        let (left_behind, its_views) = light_with_views(&mut world, 6, false);
+        let (seen, seen_views) = light_with_views(&mut world, 1, true);
+        world.run_system_once(drop_stale_shadow_views).unwrap();
+        world.flush();
+        assert!(world.get::<PointAndSpotLightViewEntities>(left_behind).is_none(), "the light left behind has no views");
+        assert!(its_views.iter().all(|v| world.get_entity(*v).is_err()), "and its six views are gone");
+        assert_eq!(world.get::<PointAndSpotLightViewEntities>(seen).map(|v| v.len()), Some(1), "the light in view keeps its view");
+        assert!(world.get_entity(seen_views[0]).is_ok());
+        // Seen again, the light gets the component back with its `ExtractedPointLight` (Bevy requires it).
+        world.entity_mut(left_behind).insert(extracted());
+        assert_eq!(world.get::<PointAndSpotLightViewEntities>(left_behind).map(|v| v.len()), Some(0));
     }
 }
