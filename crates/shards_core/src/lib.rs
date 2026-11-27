@@ -93,6 +93,12 @@ pub struct EngineConfig {
     pub report_perf: bool,
     /// Window size in logical pixels.
     pub window: (u32, u32),
+    /// A window draws on a thread of its own, side by side with the game's update (Bevy's pipelined rendering): a
+    /// frame costs the slower of the two instead of their sum, and the picture is one frame later behind the mouse.
+    /// `false` (the default) draws each frame right after its update, on one thread: the least latency, at a frame
+    /// rate of update plus render. A game whose render thread is its limit sets it for the frame rate; at 144 frames
+    /// a second the frame it adds is 7 ms. `--offscreen` always draws side by side.
+    pub pipelined_rendering: bool,
     /// Where `EngineState::Loading` goes once everything is loaded: `InGame`, or `MainMenu` for a
     /// game with a main menu. Whether a run shows that menu is [`menu`](Self::menu)'s to say
     /// ([`start_state`](Self::start_state)).
@@ -324,6 +330,7 @@ impl Default for EngineConfig {
             frame_budget: None,
             report_perf: true,
             window: (1280, 720),
+            pipelined_rendering: false,
             after_loading: EngineState::InGame,
             menu: MenuLaunch::Auto,
             loading_image: None,
