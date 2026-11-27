@@ -408,6 +408,14 @@ Changes that land in the main branch after phases C–E (`0.4.0`) go here.
   and the timing `field_timing` (`#[ignore]`) in `physics/world.rs`.
 
 ### Fixed
+- A light that left the views keeps no shadow views (`shards_light`, with `render`). Bevy 0.20 stops drawing a point or
+  spot light that is out of every view but left its shadow views alive, and each ran the whole `Core3d` schedule every
+  frame until the light was seen again: with a shadow budget that follows the player, every shadowed lamp left behind
+  kept its views (a point light six), so a game drew many more views than its budget. They go as the light leaves the
+  views now (a game's own Bevy lights too). In a game with a budget of 12 views and 11 left behind, a frame's render
+  time went from 10.5 ms to 9.1.
+- A game built with `trace_tracy` starts: `FramesPlugin` added Bevy's `RenderDiagnosticsPlugin`, which Bevy's render
+  plugin has already added with tracing on, and the second one was a panic.
 - The first-person arms under an HDR world camera (a `picture.bloom`): the view model's camera drew in HDR into the world
   camera's texture after its tone mapping and grade, with neither, so a grade's exposure brightened the world and left
   the arms that many stops darker (1.7 in a game's tunnels). It now draws without HDR whatever the world camera does, tone
