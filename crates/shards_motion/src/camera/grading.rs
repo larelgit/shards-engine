@@ -58,7 +58,7 @@ pub struct Grading {
     /// blue). The check allows `-1` to `1`. HDR only.
     pub temperature: f32,
     /// White balance toward magenta (positive) or green (negative): what is added to the *y* of the white point (D65's
-    /// is 0.3290); 0.01 to 0.03 is a clear cast. The check allows `-1` to `1`. HDR only.
+    /// is 0.3290), so small numbers are strong here too. The check allows `-1` to `1`. HDR only.
     pub tint: f32,
     /// Turns every hue round the colour wheel, degrees: `-180` to `180`. HDR only.
     pub hue_deg: f32,
@@ -106,13 +106,14 @@ impl Grading {
             .collect()
     }
 
-    /// The fields of this grade that only a camera drawing in HDR shows (every one but `exposure` that is not
-    /// neutral), by name. Without HDR, Bevy grades in each material's shader and applies the exposure alone.
+    /// The fields of this grade that only a camera drawing in HDR shows (every one but `exposure` that is more than
+    /// 0.0005 from neutral, as the `lights` query prints them), by name. Without HDR, Bevy grades in each material's
+    /// shader and applies the exposure alone.
     pub fn hdr_only(&self) -> Vec<&'static str> {
         self.fields()
             .into_iter()
             .zip(Self::default().fields())
-            .filter(|((name, value, ..), (_, neutral, ..))| *name != "exposure" && value != neutral)
+            .filter(|((name, value, ..), (_, neutral, ..))| *name != "exposure" && (value - neutral).abs() > 0.0005)
             .map(|((name, ..), _)| name)
             .collect()
     }
@@ -567,6 +568,7 @@ mod tests {
         assert!(Grading { exposure: 1.7, ..default() }.hdr_only().is_empty(), "an exposure is drawn by every camera");
         let grade = Grading { exposure: 1.7, temperature: 0.03, contrast: 1.2, gain: 1.1, ..default() };
         assert_eq!(grade.hdr_only(), ["temperature", "contrast", "gain"]);
+        assert!(Grading { saturation: 1.0001, ..default() }.hdr_only().is_empty(), "the end of a blend is neutral, as the query prints it");
     }
 
     #[test]
