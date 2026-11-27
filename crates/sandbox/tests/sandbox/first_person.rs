@@ -356,7 +356,8 @@ fn ssao_from_the_camera_content_draws_through_the_first_person_cameras_and_goes_
     let occluded = drawn(&mut app, &picture);
     let world = app.world();
     assert!(world.get::<ScreenSpaceAmbientOcclusion>(camera).is_some() && world.get::<NormalPrepass>(camera).is_some());
-    assert_eq!((msaa(&app, camera), msaa(&app, view_model)), (Some(Msaa::Off), Some(Msaa::Off)), "both cameras without MSAA");
+    // The sandbox's camera draws in HDR (its bloom): the arms are drawn into a texture of their own, with MSAA of their own.
+    assert_eq!((msaa(&app, camera), msaa(&app, view_model)), (Some(Msaa::Off), Some(Msaa::Sample4)), "the world camera without MSAA, the arms with");
     assert!(world.get::<ScreenSpaceAmbientOcclusion>(view_model).is_none(), "the arms have no SSAO of their own");
     let luma = |[r, g, b]: [f64; 3]| 0.2126 * r + 0.7152 * g + 0.0722 * b;
     let (w, h) = (plain.width(), plain.height());
@@ -379,7 +380,7 @@ fn ssao_from_the_camera_content_draws_through_the_first_person_cameras_and_goes_
     settle(&mut app, 30);
     let back = drawn(&mut app, &picture);
     assert!(app.world().get::<ScreenSpaceAmbientOcclusion>(camera).is_none());
-    assert_eq!((msaa(&app, camera), msaa(&app, view_model)), (own, own), "the MSAA the camera had, on both");
+    assert_eq!((msaa(&app, camera), msaa(&app, view_model)), (own, Some(Msaa::Sample4)), "the MSAA the camera had, and the arms' own");
     assert!(mean_difference(&plain, &back) < 1.0, "the plain picture again: {:.3}", mean_difference(&plain, &back));
 }
 
@@ -479,4 +480,39 @@ fn the_arms_are_drawn_alike_over_a_world_camera_with_hdr_and_without() {
     let arms = changed(&hdr, &hdr_bare, (230, 440, 870, 280));
     let world = changed(&hdr, &hdr_bare, (300, 200, 980, 200));
     assert!(arms > 5000 && world < 50, "in HDR the arms are laid over the world, which shows round them: {arms} pixels differ below, {world} above");
+}
+
+/// The content's anti-aliasing pass draws over SSAO, which took the camera's MSAA: the edges change, the picture's
+/// light does not, and taking it out gives the picture back.
+#[test]
+#[ignore = "needs a GPU, or a software one (WGPU_FORCE_FALLBACK_ADAPTER=1): cargo test -p sandbox --test sandbox -- --ignored first_person"]
+fn the_contents_anti_aliasing_smooths_the_edges_of_a_picture_without_msaa() {
+    use shards::motion::camera::{AntiAliasing, SsaoQuality, SsaoTuning};
+
+    use crate::offscreen::block;
+
+    let mut app = offscreen_app();
+    let picture = app.world().resource::<Offscreen>().image.clone();
+    step(&mut app, 30);
+    look_down_through_the_eye(&mut app);
+    settle(&mut app, 200);
+    let take = |app: &mut App, name: &str, aa: Option<AntiAliasing>| {
+        let mut tuning = app.world_mut().resource_mut::<CameraTuning>();
+        tuning.picture.ssao = Some(SsaoTuning { quality: SsaoQuality::Medium, radius: 0.5, ..default() });
+        tuning.picture.anti_aliasing = aa;
+        settle(app, 30);
+        shot_to(app, name);
+        capture_stable(app, &picture)
+    };
+    let bare = take(&mut app, "ssao-no-aa", None);
+    let smaa = take(&mut app, "ssao-smaa", Some(AntiAliasing::Smaa));
+    let fxaa = take(&mut app, "ssao-fxaa", Some(AntiAliasing::Fxaa));
+    let again = take(&mut app, "ssao-no-aa-again", None);
+    let (w, h) = (bare.width(), bare.height());
+    let (by_smaa, by_fxaa, back) = (changed(&bare, &smaa, (0, 0, w, h)), changed(&bare, &fxaa, (0, 0, w, h)), changed(&bare, &again, (0, 0, w, h)));
+    let (light, light_smaa) = (block(&bare, 0, 0, w, h), block(&smaa, 0, 0, w, h));
+    eprintln!("anti-aliasing over SSAO: SMAA changed {by_smaa} pixels, FXAA {by_fxaa}, none again {back}; mean {light:.1?} and {light_smaa:.1?}");
+    assert!(by_smaa > 100 && by_fxaa > 100, "each pass changes the edges: {by_smaa} and {by_fxaa} pixels");
+    assert!((0..3).all(|c| (light[c] - light_smaa[c]).abs() < 1.0), "and not the light: {light:.1?} and {light_smaa:.1?}");
+    assert!(back < 50, "taken out, the picture is as it was: {back} pixels differ");
 }

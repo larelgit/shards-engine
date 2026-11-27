@@ -15,8 +15,13 @@
 //! and a camera without MSAA: while the content gives a camera SSAO, the camera gets the prepasses it
 //! lacks (again, if another module takes one away) and `Msaa::Off`, and taking SSAO out of the content
 //! gives it back its own MSAA and drops the prepasses it did not have. The view model's camera
-//! (`shards_action`) copies the world camera's MSAA, so the two still share one main texture; it gets no
-//! SSAO of its own (the arms are drawn over the occluded world).
+//! (`shards_action`) copies the world camera's MSAA while the two share one main texture (the world camera
+//! not in HDR), and keeps its own 4x MSAA over an HDR one; it gets no SSAO of its own (the arms are drawn
+//! over the occluded world).
+//!
+//! An anti-aliasing pass ([`AntiAliasing`]: Bevy's `Fxaa` or `Smaa`) smooths the edges in the finished
+//! picture, as MSAA does while the picture is drawn: what a camera that SSAO took MSAA from wants. Taking it
+//! out of the content gives the camera back its own (or none).
 //!
 //! Only the picture changes: the `camera` kind is not simulation content, and nothing here is in a
 //! snapshot or a replay.
@@ -132,6 +137,16 @@ impl Default for SsaoTuning {
     }
 }
 
+/// An anti-aliasing pass over the finished picture, for a camera without MSAA (SSAO turns it off): Bevy's FXAA (cheap,
+/// a little soft) or SMAA (its `High` preset: sharper, dearer). Both run after the tone mapping and leave the UI alone.
+#[derive(Reflect, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AntiAliasing {
+    /// Bevy's `Fxaa` with its defaults.
+    Fxaa,
+    /// Bevy's `Smaa` with its `High` preset.
+    Smaa,
+}
+
 /// The picture a camera draws: each part left out leaves the camera as the game made it.
 ///
 /// ```ron
@@ -158,6 +173,10 @@ pub struct PictureTuning {
     /// prepass.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ssao: Option<SsaoTuning>,
+    /// An anti-aliasing pass over the picture ([`AntiAliasing`]); `None` keeps the camera's own (none, unless the game
+    /// gave it one). With `ssao`, which turns MSAA off, the edges want one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub anti_aliasing: Option<AntiAliasing>,
 }
 
 impl PictureTuning {
@@ -205,6 +224,8 @@ pub(super) use render::apply_picture;
 
 #[cfg(feature = "render")]
 mod render {
+    use bevy::anti_alias::fxaa::Fxaa;
+    use bevy::anti_alias::smaa::{Smaa, SmaaPreset};
     use bevy::camera::Hdr;
     use bevy::core_pipeline::prepass::{DepthPrepass, NormalPrepass};
     use bevy::pbr::{ScreenSpaceAmbientOcclusion, ScreenSpaceAmbientOcclusionQualityLevel};
@@ -212,7 +233,7 @@ mod render {
     use bevy::prelude::*;
     use bevy::render::view::{Msaa, Tonemapping};
 
-    use super::{BloomComposite, BloomTuning, SsaoQuality, SsaoTuning, ToneMapping};
+    use super::{AntiAliasing, BloomComposite, BloomTuning, SsaoQuality, SsaoTuning, ToneMapping};
     use crate::camera::{CameraTuning, FirstPersonCamera, ThirdPersonCamera};
 
     impl ToneMapping {
@@ -276,6 +297,8 @@ mod render {
         hdr_added: bool,
         /// The camera's own SSAO (or none) and MSAA (or none) while the content's SSAO is in force.
         ssao: Option<SsaoOwn>,
+        /// The camera's own FXAA and SMAA (or none) while the content's anti-aliasing is in force.
+        anti_aliasing: Option<(Option<Fxaa>, Option<Smaa>)>,
     }
 
     /// What a camera had before the content gave it SSAO.
@@ -298,7 +321,15 @@ mod render {
     type Cameras<'w, 's> = Query<
         'w,
         's,
-        (Entity, Option<&'static Tonemapping>, Option<&'static Bloom>, Has<Hdr>, Option<&'static PictureSet>, SsaoNeeds),
+        (
+            Entity,
+            Option<&'static Tonemapping>,
+            Option<&'static Bloom>,
+            Has<Hdr>,
+            Option<&'static PictureSet>,
+            SsaoNeeds,
+            (Option<&'static Fxaa>, Option<&'static Smaa>),
+        ),
         (With<Camera3d>, Or<(With<ThirdPersonCamera>, With<FirstPersonCamera>)>),
     >;
 
@@ -328,7 +359,7 @@ mod render {
             return;
         }
         let picture = &tuning.picture;
-        for (entity, tone_mapping, bloom, hdr, set, (ssao, msaa, depth, normal)) in &cameras {
+        for (entity, tone_mapping, bloom, hdr, set, (ssao, msaa, depth, normal), (fxaa, smaa)) in &cameras {
             let mut set = set.cloned().unwrap_or_default();
             let mut camera = commands.entity(entity);
             match (picture.tone_mapping, set.tone_mapping) {
@@ -415,7 +446,41 @@ mod render {
                 }
                 (None, None) => {}
             }
-            if set.tone_mapping.is_none() && set.bloom.is_none() && set.ssao.is_none() {
+            match (picture.anti_aliasing, set.anti_aliasing.take()) {
+                (Some(want), own) => {
+                    set.anti_aliasing = Some(own.unwrap_or_else(|| (fxaa.cloned(), smaa.cloned())));
+                    match want {
+                        AntiAliasing::Fxaa => {
+                            if smaa.is_some() {
+                                camera.remove::<Smaa>();
+                            }
+                            if fxaa.is_none_or(|f| !f.enabled) {
+                                camera.insert(Fxaa::default());
+                            }
+                        }
+                        AntiAliasing::Smaa => {
+                            if fxaa.is_some() {
+                                camera.remove::<Fxaa>();
+                            }
+                            if smaa.is_none_or(|s| s.preset != SmaaPreset::High) {
+                                camera.insert(Smaa { preset: SmaaPreset::High });
+                            }
+                        }
+                    }
+                }
+                (None, Some((own_fxaa, own_smaa))) => {
+                    match own_fxaa {
+                        Some(theirs) => camera.insert(theirs),
+                        None => camera.remove::<Fxaa>(),
+                    };
+                    match own_smaa {
+                        Some(theirs) => camera.insert(theirs),
+                        None => camera.remove::<Smaa>(),
+                    };
+                }
+                (None, None) => {}
+            }
+            if set.tone_mapping.is_none() && set.bloom.is_none() && set.ssao.is_none() && set.anti_aliasing.is_none() {
                 camera.remove::<PictureSet>();
             } else {
                 camera.insert(set);
@@ -525,6 +590,21 @@ mod render {
             assert!(world.get::<DepthPrepass>(camera).is_some(), "the camera's own prepass stays");
             assert!(world.get::<NormalPrepass>(camera).is_none(), "the one SSAO added goes");
             assert!(world.get::<Msaa>(camera).is_none(), "no MSAA component before, none after");
+        }
+
+        #[test]
+        fn the_contents_anti_aliasing_goes_on_and_gives_the_camera_back_its_own() {
+            let (mut app, camera) = app();
+            app.world_mut().entity_mut(camera).insert(Fxaa { enabled: true, ..default() });
+            set(&mut app, PictureTuning { anti_aliasing: Some(AntiAliasing::Smaa), ..default() });
+            let world = app.world();
+            assert!(world.get::<Smaa>(camera).is_some_and(|s| s.preset == SmaaPreset::High) && world.get::<Fxaa>(camera).is_none(), "SMAA in, the camera's FXAA out");
+            set(&mut app, PictureTuning { anti_aliasing: Some(AntiAliasing::Fxaa), ..default() });
+            assert!(app.world().get::<Fxaa>(camera).is_some() && app.world().get::<Smaa>(camera).is_none(), "FXAA in its place");
+            set(&mut app, PictureTuning::default());
+            let world = app.world();
+            assert!(world.get::<Fxaa>(camera).is_some_and(|f| f.enabled) && world.get::<Smaa>(camera).is_none(), "the camera's own FXAA again");
+            assert!(world.get::<PictureSet>(camera).is_none(), "and nothing kept");
         }
 
         #[test]

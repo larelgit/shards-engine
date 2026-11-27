@@ -11,8 +11,9 @@
 //!   materials tone map in their shaders and take the world camera's grade (its exposure; [`ColorGrading`]
 //!   is drawn in full only in HDR), so the arms are drawn as they were before the world went HDR. The two
 //!   formats cannot share a texture: the view model draws into its own, cleared to nothing, and that is laid
-//!   over the world's finished picture (premultiplied alpha, [`CameraOutputMode`]). An HDR view model drawn
-//!   into the world's texture would come after the world's tone mapping and grade, and be drawn with neither.
+//!   over the world's finished picture (premultiplied alpha, [`CameraOutputMode`]), with Bevy's 4x MSAA of
+//!   its own whatever the world camera has (SSAO turns the world's off). An HDR view model drawn into the
+//!   world's texture would come after the world's tone mapping and grade, and be drawn with neither.
 //! - **The rig** ([`ViewModelRig`]) is a child of the camera: an [`Animated`] root that [`ShowsBody`] of
 //!   the looked-through body, so the bridge animates it from that body's actions, with a [`GltfModel`] below.
 //!   Which definition it is follows the body's moveset each frame, so a weapon switch swaps it; an edit of
@@ -145,6 +146,9 @@ fn sync_view_model(
         // The view model never draws in HDR: it tone maps (and grades, F13) in its materials' shaders, with the world
         // camera's tone mapping and grade, so the arms are drawn alike over a world camera with HDR and without.
         let (tone, grading) = (tonemapping.copied(), world_grading.cloned());
+        // Sharing a texture, the two must have the same MSAA. Over an HDR camera the view model has a texture of its own
+        // and keeps Bevy's 4x MSAA for the arms, though the world camera may have none (SSAO turns it off).
+        let msaa = if hdr { Some(&Msaa::Sample4) } else { msaa };
         // Over a world camera without HDR it draws into the same texture, over what the world drew. Over an HDR one (whose
         // texture is of another format) it draws into its own, cleared to nothing, and lays that over the world's picture.
         let (clear, output) = if hdr {

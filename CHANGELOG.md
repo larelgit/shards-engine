@@ -66,11 +66,16 @@ git push origin v0.1.0
 Changes that land in the main branch after phases C–E (`0.4.0`) go here.
 
 ### Added
+- An anti-aliasing pass in the camera's picture (the manual's "The picture"): `picture.anti_aliasing: Some(Fxaa)` or
+  `Some(Smaa)` in the `camera` content puts Bevy's `Fxaa` (its defaults) or `Smaa` (`High`) on the world cameras, for a
+  camera SSAO took MSAA from; taking it out gives the camera back its own. `AntiAliasing`. Off by default. The view
+  model's camera over an HDR world camera keeps Bevy's 4x MSAA of its own (it has its own texture there).
 - Ambient occlusion in the camera's picture (the manual's "The picture"): `picture.ssao: Some((quality, radius, thickness))`
   in the `camera` content gives the world cameras Bevy's `ScreenSpaceAmbientOcclusion` (`SsaoTuning`, `SsaoQuality::{Low,
   Medium, High, Ultra}`), with the depth and normal prepasses it needs and `Msaa::Off` while it is on (Bevy draws no SSAO
   under MSAA); taking it out gives the camera back its own SSAO, MSAA and prepasses. The view model's camera follows the
-  world camera's MSAA and has no SSAO. Off by default.
+  world camera's MSAA (its own 4x over an HDR world camera, whose texture it does not share) and has no SSAO. Off by
+  default.
 - A shadow budget in views (the manual's "Lights and colour grading (F13)"): `graphics.shadow_views` (0 to 384, default 0)
   counts the shadow budget in shadow views, a point light 6 and a spot 1, the nearest first, and replaces
   `graphics.shadow_lights` while above 0. The `lights` query says the budget in views, how many are taken and, for a light

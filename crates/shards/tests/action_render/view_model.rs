@@ -251,6 +251,8 @@ fn a_world_camera_that_grades_in_its_shaders_hands_its_grade_to_the_view_model_c
     let world = app.world();
     assert!(world.get::<Hdr>(vm).is_none(), "and draws without HDR");
     assert_eq!(world.get::<Tonemapping>(vm), Some(&Tonemapping::TonyMcMapface), "tone mapped as the world is, in its shaders");
+    use shards::bevy::render::view::Msaa;
+    assert_eq!(world.get::<Msaa>(vm), Some(&Msaa::Sample4), "with MSAA of its own");
     let cam = world.get::<Camera>(vm).unwrap();
     assert!(matches!(cam.clear_color, ClearColorConfig::Custom(c) if c == Color::NONE), "its own texture starts empty: {:?}", cam.clear_color);
     assert!(
