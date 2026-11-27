@@ -66,11 +66,16 @@ git push origin v0.1.0
 Changes that land in the main branch after phases C–E (`0.4.0`) go here.
 
 ### Added
+- An anti-aliasing pass in the camera's picture (the manual's "The picture"): `picture.anti_aliasing: Some(Fxaa)` or
+  `Some(Smaa)` in the `camera` content puts Bevy's `Fxaa` (its defaults) or `Smaa` (`High`) on the world cameras, for a
+  camera SSAO took MSAA from; taking it out gives the camera back its own. `AntiAliasing`. Off by default. The view
+  model's camera over an HDR world camera keeps Bevy's 4x MSAA of its own (it has its own texture there).
 - Ambient occlusion in the camera's picture (the manual's "The picture"): `picture.ssao: Some((quality, radius, thickness))`
   in the `camera` content gives the world cameras Bevy's `ScreenSpaceAmbientOcclusion` (`SsaoTuning`, `SsaoQuality::{Low,
   Medium, High, Ultra}`), with the depth and normal prepasses it needs and `Msaa::Off` while it is on (Bevy draws no SSAO
   under MSAA); taking it out gives the camera back its own SSAO, MSAA and prepasses. The view model's camera follows the
-  world camera's MSAA and has no SSAO. Off by default.
+  world camera's MSAA (its own 4x over an HDR world camera, whose texture it does not share) and has no SSAO. Off by
+  default.
 - A shadow budget in views (the manual's "Lights and colour grading (F13)"): `graphics.shadow_views` (0 to 384, default 0)
   counts the shadow budget in shadow views, a point light 6 and a spot 1, the nearest first, and replaces
   `graphics.shadow_lights` while above 0. The `lights` query says the budget in views, how many are taken and, for a light
@@ -403,6 +408,13 @@ Changes that land in the main branch after phases C–E (`0.4.0`) go here.
   and the timing `field_timing` (`#[ignore]`) in `physics/world.rs`.
 
 ### Fixed
+- The first-person arms under an HDR world camera (a `picture.bloom`): the view model's camera drew in HDR into the world
+  camera's texture after its tone mapping and grade, with neither, so a grade's exposure brightened the world and left
+  the arms that many stops darker (1.7 in a game's tunnels). It now draws without HDR whatever the world camera does, tone
+  mapped and graded (the exposure) in its materials' shaders as over a camera without HDR; over an HDR one it draws into a
+  texture of its own, cleared to nothing, laid over the world's finished picture with premultiplied alpha (Bevy's
+  `CameraOutputMode`). The arms look the same with a bloom and without; the bloom and the rest of an HDR grade are the
+  world's alone. Tested on a GPU (`first_person::the_arms_are_drawn_alike_over_a_world_camera_with_hdr_and_without`).
 - Colour grading said every field of a grade is drawn; Bevy draws only a grade's `exposure` on a camera that does not draw
   in HDR (it grades in each material's shader there), and the rest (`temperature`, `tint`, `hue_deg`, `saturation`,
   `contrast`, `lift`, `gamma`, `gain`) only in HDR, in its tone mapping pass. A grade tuned without HDR therefore changed
