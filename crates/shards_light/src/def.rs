@@ -93,6 +93,12 @@ pub struct LightDef {
     /// How the brightness moves.
     #[serde(skip_serializing_if = "is_steady")]
     pub flicker: Flicker,
+    /// Whether its light is baked into the level's lightmaps (`baked_light`, `shards_level`): it then lights no
+    /// lightmapped mesh's diffuse (Bevy's `affects_lightmapped_mesh_diffuse`), which has it already, and still lights
+    /// what moves (bodies, props) and the shine of every surface. A flashlight, a muzzle flash and a light that
+    /// changes from the bake (a flicker the bake did not see) leave it `false`.
+    #[serde(skip_serializing_if = "is_false")]
+    pub baked: bool,
 }
 
 fn is_zero(v: &f32) -> bool {
@@ -109,7 +115,7 @@ fn is_steady(f: &Flicker) -> bool {
 
 impl Default for LightDef {
     fn default() -> Self {
-        Self { kind: LightKind::Point, color: String::new(), kelvin: 0.0, intensity: 100_000.0, range: 15.0, radius: 0.0, shadows: false, flicker: Flicker::None }
+        Self { kind: LightKind::Point, color: String::new(), kelvin: 0.0, intensity: 100_000.0, range: 15.0, radius: 0.0, shadows: false, flicker: Flicker::None, baked: false }
     }
 }
 

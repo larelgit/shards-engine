@@ -43,6 +43,7 @@ fn point_of(light: &LightInfo) -> Option<PointLight> {
         range: def.range,
         radius: def.radius,
         shadow_maps_enabled: light.casts,
+        affects_lightmapped_mesh_diffuse: !def.baked,
         ..default()
     })
 }
@@ -58,6 +59,7 @@ fn spot_of(light: &LightInfo) -> Option<SpotLight> {
         shadow_maps_enabled: light.casts,
         inner_angle: half(inner_deg),
         outer_angle: half(outer_deg),
+        affects_lightmapped_mesh_diffuse: !def.baked,
         ..default()
     })
 }
@@ -76,11 +78,11 @@ macro_rules! sync_fields {
 }
 
 fn set_point(light: &mut Mut<PointLight>, want: &PointLight) {
-    sync_fields!(light, want, [color, intensity, range, radius, shadow_maps_enabled]);
+    sync_fields!(light, want, [color, intensity, range, radius, shadow_maps_enabled, affects_lightmapped_mesh_diffuse]);
 }
 
 fn set_spot(light: &mut Mut<SpotLight>, want: &SpotLight) {
-    sync_fields!(light, want, [color, intensity, range, radius, shadow_maps_enabled, inner_angle, outer_angle]);
+    sync_fields!(light, want, [color, intensity, range, radius, shadow_maps_enabled, inner_angle, outer_angle, affects_lightmapped_mesh_diffuse]);
 }
 
 /// `Update`, after the state: each content light has the Bevy light its definition and the budget say, and a

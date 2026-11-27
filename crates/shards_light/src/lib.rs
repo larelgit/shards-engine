@@ -16,7 +16,8 @@
 //!   noise of a depth.
 //! - **Shadow budget.** `graphics.shadow_lights` (default 4, none under `graphics.shadows = "off"`): of the lights
 //!   whose content says `shadows: true`, the nearest that many to the viewer (the active camera, else the local player)
-//!   cast shadows, ties by a stable key ([`budget::casters`]).
+//!   cast shadows, ties by a stable key ([`budget::casters`]). `graphics.shadow_views` above 0 counts the budget in
+//!   shadow views instead (a point light 6, a spot 1), nearest first, and replaces `shadow_lights`.
 //! - **For the AI:** the `lights` query (counts by kind, who casts a shadow now, who flickers and how bright, the
 //!   picture's grading and its blend) and `light` in `ai/status`.
 //!
@@ -43,6 +44,7 @@ use shards_core::{EngineAppExt, LocalPlayer};
 use shards_motion::camera::{picture_clock, FirstPersonCamera, ThirdPersonCamera};
 use shards_settings::{AccessibilitySettings, FlashLevel, GraphicsSettings};
 
+pub use budget::ShadowBudget;
 pub use def::{kelvin_srgb, Flicker, LightDef, LightKind, MAX_RANGE};
 pub use tools::LightsArgs;
 
@@ -137,9 +139,20 @@ pub struct LightInfo {
     pub distance: Option<f32>,
 }
 
+impl LightInfo {
+    /// The shadow views its shadow takes: 6 for a point light (a cube), 1 for a spot, 0 with no definition.
+    pub fn shadow_views(&self) -> usize {
+        match self.def.as_ref().map(|d| d.kind) {
+            Some(LightKind::Point) => budget::POINT_VIEWS,
+            Some(LightKind::Spot { .. }) => budget::SPOT_VIEWS,
+            None => 0,
+        }
+    }
+}
+
 /// Where the picture's lights stand now: refreshed every frame, and by the `lights` query. The picture's, never
 /// the simulation's (no `AiId`, not in a snapshot or a replay).
-#[derive(Resource, Clone, Debug, Default, PartialEq)]
+#[derive(Resource, Clone, Debug, PartialEq)]
 pub struct LightState {
     /// Every content light, in key order.
     pub lights: Vec<LightInfo>,
@@ -147,10 +160,25 @@ pub struct LightState {
     pub clock: f64,
     /// The viewer the shadow budget measures from, and what it is (`camera`, `player`).
     pub viewer: Option<(Vec3, &'static str)>,
-    /// How many lights may cast a shadow.
-    pub budget: usize,
+    /// How many lights, or shadow views, may cast a shadow.
+    pub budget: ShadowBudget,
+    /// The shadow views the lights that cast one take now (a point light 6, a spot 1), whatever the budget counts.
+    pub views_used: usize,
     /// The player's `accessibility.flashes`: what flickers is slower and shallower (`Reduced`) or steady (`Off`).
     pub flashes: FlashLevel,
+}
+
+impl Default for LightState {
+    fn default() -> Self {
+        Self {
+            lights: Vec::new(),
+            clock: 0.0,
+            viewer: None,
+            budget: ShadowBudget::Lights(DEFAULT_SHADOW_LIGHTS),
+            views_used: 0,
+            flashes: FlashLevel::default(),
+        }
+    }
 }
 
 impl LightState {
@@ -219,7 +247,7 @@ fn update_state(
     mut seeds: ResMut<LightSeeds>,
 ) {
     let clock = picture_clock(&fixed);
-    let budget = settings.as_ref().map_or(DEFAULT_SHADOW_LIGHTS, |s| s.shadow_light_budget());
+    let budget = settings.as_ref().map_or(ShadowBudget::Lights(DEFAULT_SHADOW_LIGHTS), |s| s.shadow_budget());
     let flashes = accessibility.as_ref().map_or(FlashLevel::Full, |a| a.flash_level());
     let viewer = cameras
         .iter()
@@ -259,25 +287,34 @@ fn update_state(
     seeds.forget_unplaced(&placed);
     // Key order, then place: never the order of a query.
     lights.sort_by(|a, b| a.key.cmp(&b.key).then_with(|| a.position.to_array().map(f32::to_bits).cmp(&b.position.to_array().map(f32::to_bits))));
-    let candidates: Vec<budget::Candidate> =
-        lights.iter().map(|l| budget::Candidate { distance: l.distance.unwrap_or(0.0), key: &l.key, wants: l.wants_shadow }).collect();
+    let candidates: Vec<budget::Candidate> = lights
+        .iter()
+        .map(|l| budget::Candidate { distance: l.distance.unwrap_or(0.0), key: &l.key, wants: l.wants_shadow, views: l.shadow_views() })
+        .collect();
     let casts = budget::casters(&candidates, budget);
+    let views_used = budget::views_used(&candidates, &casts);
     for (light, casts) in lights.iter_mut().zip(casts) {
         light.casts = casts;
     }
-    let next = LightState { lights, clock, viewer, budget, flashes };
+    let next = LightState { lights, clock, viewer, budget, views_used, flashes };
     if *state != next {
         *state = next;
     }
 }
 
-/// `ai/status` → `light: {lights, casting, flickering, budget}`.
+/// `ai/status` → `light: {lights, casting, flickering, budget}`, and `budget_views` (the budget counts views, a point
+/// light 6, a spot 1) with `views_used` while `graphics.shadow_views` is set.
 fn status(world: &World) -> Value {
     let Some(state) = world.get_resource::<LightState>() else { return json!({}) };
-    json!({
+    let mut out = json!({
         "lights": state.lights.len(),
         "casting": state.casting().count(),
         "flickering": state.flickering().count(),
-        "budget": state.budget,
-    })
+        "budget": state.budget.amount(),
+    });
+    if let ShadowBudget::Views(_) = state.budget {
+        out["budget_views"] = json!(true);
+        out["views_used"] = json!(state.views_used);
+    }
+    out
 }

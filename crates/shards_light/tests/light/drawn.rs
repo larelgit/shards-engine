@@ -1,8 +1,10 @@
 //! A game that draws (offscreen, with no GPU behind it): each content light gets a Bevy light on a child entity, driven
 //! every frame, and the game's own lights are left alone.
 
+use shards::bevy::camera::{Camera3d, Hdr};
 use shards::bevy::light::{PointLight, SpotLight};
 use shards::light::{ContentLight, LightPicture};
+use shards::motion::camera::{CameraTuning, Grading, ThirdPersonCamera};
 use shards::settings::GraphicsSettings;
 
 use crate::*;
@@ -127,4 +129,29 @@ fn a_light_that_loses_its_content_light_or_its_definition_loses_its_picture_and_
     assert_eq!(count(&mut app), 0, "the picture goes with the component");
     let own_light = app.world().get::<PointLight>(own).unwrap();
     assert_eq!((own_light.intensity, own_light.shadow_maps_enabled), (777.0, true), "the game's own light is its own");
+}
+
+/// The `lights` query says how much of the grade the world camera draws: without HDR Bevy grades in each material's
+/// shader and draws the exposure alone, in HDR all of it; a grade of nothing but an exposure needs no word.
+#[test]
+fn the_query_says_how_much_of_the_grade_the_camera_draws() {
+    let assets = Folder::new("drawn_grade");
+    let mut app = drawn(&assets);
+    let camera = app.world_mut().spawn((Camera3d::default(), ThirdPersonCamera::default())).id();
+    app.world_mut().resource_mut::<CameraTuning>().picture.grading = Some(Grading { exposure: 0.5, temperature: 0.03, contrast: 1.1, ..default() });
+    app.update();
+    let said = ok(&mut app, "lights", json!({}));
+    assert!(said.contains("shows: exposure 0.500, temperature 0.030, contrast 1.100"), "{said}");
+    assert!(
+        said.contains("  drawn: its exposure alone; the camera draws without HDR, where Bevy grades in each material's shader and leaves out temperature, contrast"),
+        "{said}"
+    );
+    app.world_mut().entity_mut(camera).insert(Hdr);
+    let said = ok(&mut app, "lights", json!({}));
+    assert!(said.contains("  drawn: all of it (the camera draws in HDR)"), "{said}");
+    app.world_mut().resource_mut::<CameraTuning>().picture.grading = Some(Grading { exposure: 0.5, ..default() });
+    app.world_mut().entity_mut(camera).remove::<Hdr>();
+    app.update();
+    let said = ok(&mut app, "lights", json!({}));
+    assert!(said.contains("shows: exposure 0.500") && !said.contains("drawn:"), "every camera draws an exposure: {said}");
 }

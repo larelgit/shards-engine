@@ -246,3 +246,33 @@ fn a_world_camera_that_grades_in_its_shaders_hands_its_grade_to_the_view_model_c
     app.update();
     assert_eq!(grade_of(&app, vm), ColorGrading::default(), "under HDR the view model is drawn over the graded picture, ungraded");
 }
+
+#[test]
+fn ssao_on_the_world_camera_turns_its_msaa_off_and_the_view_model_camera_follows_without_ssao_of_its_own() {
+    use shards::bevy::pbr::ScreenSpaceAmbientOcclusion;
+    use shards::bevy::render::view::Msaa;
+    use shards::motion::camera::{PictureTuning, SsaoTuning};
+
+    let World3 { mut app, camera, .. } = scene("action_render_view_model_ssao");
+    // A window's camera has MSAA (the render plugin's required component); the bare test app's does not, so give it one.
+    app.world_mut().entity_mut(camera).insert(Msaa::Sample4);
+    app.update();
+    app.update();
+    let vm = view_cameras(&mut app)[0];
+    let msaa = |app: &App, e: Entity| app.world().get::<Msaa>(e).copied();
+    assert_eq!(msaa(&app, vm), Some(Msaa::Sample4), "the two cameras share one main texture, so one sample count");
+
+    app.world_mut().resource_mut::<CameraTuning>().picture = PictureTuning { ssao: Some(SsaoTuning::default()), ..default() };
+    app.update();
+    app.update();
+    assert!(app.world().get::<ScreenSpaceAmbientOcclusion>(camera).is_some());
+    assert_eq!(msaa(&app, camera), Some(Msaa::Off), "Bevy draws no SSAO under MSAA");
+    assert_eq!(msaa(&app, vm), Some(Msaa::Off), "the view model's camera follows the world camera");
+    assert!(app.world().get::<ScreenSpaceAmbientOcclusion>(vm).is_none(), "the arms are drawn over the occluded world, with none of their own");
+
+    app.world_mut().resource_mut::<CameraTuning>().picture = PictureTuning::default();
+    app.update();
+    app.update();
+    assert!(app.world().get::<ScreenSpaceAmbientOcclusion>(camera).is_none());
+    assert_eq!((msaa(&app, camera), msaa(&app, vm)), (Some(Msaa::Sample4), Some(Msaa::Sample4)), "both get their MSAA back");
+}

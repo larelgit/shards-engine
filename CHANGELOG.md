@@ -66,6 +66,26 @@ git push origin v0.1.0
 Changes that land in the main branch after phases C–E (`0.4.0`) go here.
 
 ### Added
+- Ambient occlusion in the camera's picture (the manual's "The picture"): `picture.ssao: Some((quality, radius, thickness))`
+  in the `camera` content gives the world cameras Bevy's `ScreenSpaceAmbientOcclusion` (`SsaoTuning`, `SsaoQuality::{Low,
+  Medium, High, Ultra}`), with the depth and normal prepasses it needs and `Msaa::Off` while it is on (Bevy draws no SSAO
+  under MSAA); taking it out gives the camera back its own SSAO, MSAA and prepasses. The view model's camera follows the
+  world camera's MSAA and has no SSAO. Off by default.
+- A shadow budget in views (the manual's "Lights and colour grading (F13)"): `graphics.shadow_views` (0 to 384, default 0)
+  counts the shadow budget in shadow views, a point light 6 and a spot 1, the nearest first, and replaces
+  `graphics.shadow_lights` while above 0. The `lights` query says the budget in views, how many are taken and, for a light
+  that missed out, what it takes and what was left; `ai/status` adds `light.budget_views` and `light.views_used`.
+  `GraphicsSettings::shadow_budget` and `ShadowBudget::{Lights, Views}`. At 0 nothing changes.
+- Baked light for levels (the manual's "Levels from Blender (E4.2)", "Baked light"): level node properties `lightmap`,
+  `lightmap_rect`, `irradiance_volume`, `reflection_probe` and `probe_falloff`, and the picture-only content kind
+  `baked_light` (`BakedLightDef { sets, set, lightmap_exposure, irradiance_intensity, reflection_intensity, bicubic }`, one
+  per level id) that names the folders of the level's sets of baked images. A drawn level puts Bevy's `Lightmap` on the
+  meshes (by their second UV map; the check names a mesh without one and every file a set lacks) and a `LightProbe` with an
+  `IrradianceVolume` and/or an `EnvironmentMapLight` on the probe boxes; lightmapped meshes still take every dynamic light.
+  A game switches a level's set at run time with `shards::level::select_baked_set` (the resource `BakedLight`, the
+  picture's, in no snapshot); the tools `baked_light` (player) and `baked_light_set` (dev). A content light's new
+  `baked: true` lights no lightmapped mesh's diffuse (its light is in the bake). A level without a `baked_light` draws as
+  before.
 - The game's own subtitle lines (the manual's "Subtitles"): `shards::audio::subtitles::say(world, Saying { sound, text,
   speaker, secs, bus })` shows a line that no voice says, for the seconds the game gives, on the clock of the bus it names
   (the simulation's, so a pause holds it; real time on `Ui`): words the game puts together, such as a tablet's new task as
@@ -383,6 +403,16 @@ Changes that land in the main branch after phases C–E (`0.4.0`) go here.
   and the timing `field_timing` (`#[ignore]`) in `physics/world.rs`.
 
 ### Fixed
+- Colour grading said every field of a grade is drawn; Bevy draws only a grade's `exposure` on a camera that does not draw
+  in HDR (it grades in each material's shader there), and the rest (`temperature`, `tint`, `hue_deg`, `saturation`,
+  `contrast`, `lift`, `gamma`, `gain`) only in HDR, in its tone mapping pass. A grade tuned without HDR therefore changed
+  when a `picture.bloom` put the camera in HDR: a game's tunnels went black with red in them. Nothing is drawn
+  differently; the docs (`Grading`, `PictureTuning::grading`, the manual's "Colour grading") say so now, give
+  `temperature` and `tint` their real scale (an offset to the CIE 1931 white point: 0.02 to 0.05 is a clear cast, the old
+  examples' 0.35 takes the white point off the diagram) and say that `contrast` pivots on 0.5 of the linear picture before
+  the exposure (a dark scene that the grade's exposure lifts goes black under a contrast above 1). The `lights` query's
+  grading lines add `drawn: all of it (the camera draws in HDR)` or `drawn: its exposure alone; ...` with the fields left
+  out; `Grading::hdr_only` and `shards_motion::camera::grade_drawn_in_full`. An offscreen test pins Bevy's behaviour.
 - A replay with a pause menu in it plays through (the manual's "Replays"). The menu takes effect after its frame's time is
   counted, so the session may run that frame's tick under it and record the calls made in the menu one tick after the
   call that opened it; played back, the opening call came inside a tick and paused the clock, which then never reached

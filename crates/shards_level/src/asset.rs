@@ -73,6 +73,8 @@ pub struct LevelNode {
     /// The bounds of the mesh's `POSITION` data in the node's own space (all primitives).
     /// `None` without a mesh, or for a mesh with no vertex positions.
     pub bounds: Option<Bounds>,
+    /// Whether every primitive of the mesh has a second UV map (`TEXCOORD_1`), which a lightmap is drawn by.
+    pub uv1: bool,
 }
 
 /// A marker as the file declares it, for listings and for `required_markers`.
@@ -142,19 +144,20 @@ impl LevelAsset {
             let path = if parent_path.is_empty() { name.clone() } else { format!("{parent_path}/{name}") };
             let world = parent_world * local_matrix(node.transform());
             let (extras, extras_problem) = parse_extras(node.extras());
-            let (mesh, bounds, mesh_extras) = match node.mesh() {
+            let (mesh, bounds, mesh_extras, uv1) = match node.mesh() {
                 Some(mesh) => (
                     Some(mesh.name().map_or_else(|| format!("mesh{}", mesh.index()), str::to_owned)),
                     mesh_bounds(&mesh),
                     parse_extras(mesh.extras()).0,
+                    mesh.primitives().len() > 0 && mesh.primitives().all(|p| p.get(&gltf::Semantic::TexCoords(1)).is_some()),
                 ),
-                None => (None, None, Map::new()),
+                None => (None, None, Map::new(), false),
             };
             let index = node.index();
             for child in node.children().collect::<Vec<_>>().into_iter().rev() {
                 stack.push((child, Some(index), world, path.clone()));
             }
-            found.insert(index, LevelNode { index, name, path, parent, world, extras, extras_problem, mesh, mesh_extras, bounds });
+            found.insert(index, LevelNode { index, name, path, parent, world, extras, extras_problem, mesh, mesh_extras, bounds, uv1 });
         }
 
         Ok(LevelAsset {

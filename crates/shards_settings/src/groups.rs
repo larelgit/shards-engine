@@ -78,6 +78,27 @@ impl ShadowQuality {
 /// The most lights from content that may cast shadows at once ([`GraphicsSettings::shadow_lights`]).
 pub const MAX_SHADOW_LIGHTS: u32 = 64;
 
+/// The most shadow views the content lights may take at once ([`GraphicsSettings::shadow_views`]): 64 cube maps.
+pub const MAX_SHADOW_VIEWS: u32 = 384;
+
+/// What the shadow budget of the content lights counts ([`GraphicsSettings::shadow_budget`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ShadowBudget {
+    /// So many lights, whatever they cost (`graphics.shadow_lights`).
+    Lights(usize),
+    /// So many shadow views (`graphics.shadow_views`): a point light takes 6 (a cube), a spot 1.
+    Views(usize),
+}
+
+impl ShadowBudget {
+    /// The number, whatever it counts.
+    pub fn amount(self) -> usize {
+        match self {
+            ShadowBudget::Lights(n) | ShadowBudget::Views(n) => n,
+        }
+    }
+}
+
 /// Window and rendering. Applied to the primary window by [`apply_graphics`](crate::apply_graphics)
 /// while there is one; a headless game only keeps the values.
 #[derive(Resource, Reflect, SettingsGroup, Clone, Debug, PartialEq)]
@@ -102,6 +123,12 @@ pub struct GraphicsSettings {
     /// [`GraphicsSettings::shadow_light_budget`]): a light that wants shadows and is farther than that many has none.
     /// Under `shadows = "off"` none does. A cube shadow map is six passes, so this is the knob for a weak GPU.
     pub shadow_lights: u32,
+    /// The same budget counted in shadow views instead of lights (1 to 384; 0, the default, counts lights by
+    /// `shadow_lights`): a point light's shadow is a cube of 6 views, a spot's is 1, and each view is a pass the render
+    /// thread prepares, so twelve views shadow twelve spots or two points. The nearest lights that ask take theirs first;
+    /// one that does not fit in what is left has none, and a farther one that fits does. When it is above 0,
+    /// `shadow_lights` is not read; `shadows = "off"` is still none ([`GraphicsSettings::shadow_budget`]).
+    pub shadow_views: u32,
     /// How much of the foliage and small props the scatter module strews (0 none to 1 all of it,
     /// [`GraphicsSettings::foliage_density`]): fewer instances of the same scatter, never others.
     pub foliage: f64,
@@ -120,6 +147,7 @@ impl Default for GraphicsSettings {
             render_scale: 1.0,
             shadows: "high".into(),
             shadow_lights: 4,
+            shadow_views: 0,
             foliage: 1.0,
             interpolation: true,
         }
@@ -155,6 +183,16 @@ impl GraphicsSettings {
         if self.shadow_quality() == ShadowQuality::Off { 0 } else { self.shadow_lights.min(MAX_SHADOW_LIGHTS) as usize }
     }
 
+    /// The shadow budget of the content lights now: `shadow_views` views when it is above 0 (at most 384), else
+    /// `shadow_lights` lights ([`Self::shadow_light_budget`]); nothing under `shadows = "off"`.
+    pub fn shadow_budget(&self) -> ShadowBudget {
+        if self.shadow_views == 0 {
+            return ShadowBudget::Lights(self.shadow_light_budget());
+        }
+        let views = if self.shadow_quality() == ShadowQuality::Off { 0 } else { self.shadow_views.min(MAX_SHADOW_VIEWS) as usize };
+        ShadowBudget::Views(views)
+    }
+
     /// Why these values are not allowed, if they are not (what `settings_set` refuses).
     pub fn check(&self) -> Result<(), String> {
         if self.resolution.trim() != "auto" && self.window_size().is_none() {
@@ -167,6 +205,12 @@ impl GraphicsSettings {
         range("graphics.foliage", self.foliage, 0.0, 1.0)?;
         if self.shadow_lights > MAX_SHADOW_LIGHTS {
             return Err(format!("graphics.shadow_lights {} is out of range: use a whole number from 0 to {MAX_SHADOW_LIGHTS}", self.shadow_lights));
+        }
+        if self.shadow_views > MAX_SHADOW_VIEWS {
+            return Err(format!(
+                "graphics.shadow_views {} is out of range: use a whole number from 0 (count lights by shadow_lights) to {MAX_SHADOW_VIEWS}",
+                self.shadow_views
+            ));
         }
         if ShadowQuality::parse(&self.shadows).is_none() {
             return Err(format!("graphics.shadows `{}` is not one of {}", self.shadows, ShadowQuality::NAMES.join(", ")));
@@ -407,6 +451,10 @@ mod tests {
         assert_eq!(GraphicsSettings::default().shadow_light_budget(), 4, "four shadow lights by default");
         assert_eq!(GraphicsSettings { shadow_lights: 1000, ..default() }.shadow_light_budget(), 64, "a hand-edited 1000 is the most");
         assert_eq!(GraphicsSettings { shadows: "off".into(), ..default() }.shadow_light_budget(), 0, "no shadows is no shadow lights");
+        assert_eq!(GraphicsSettings::default().shadow_budget(), ShadowBudget::Lights(4), "lights are counted until views are set");
+        assert_eq!(GraphicsSettings { shadow_views: 12, shadow_lights: 1, ..default() }.shadow_budget(), ShadowBudget::Views(12), "views replace lights");
+        assert_eq!(GraphicsSettings { shadow_views: 5000, ..default() }.shadow_budget(), ShadowBudget::Views(384));
+        assert_eq!(GraphicsSettings { shadow_views: 12, shadows: "off".into(), ..default() }.shadow_budget(), ShadowBudget::Views(0));
         let a = AccessibilitySettings { camera_shake: f64::NAN, fov_deg: 400.0, flashes: "strobe".into(), ..default() };
         assert_eq!((a.shake(), a.fov(), a.flash_level()), (1.0, 120.0, FlashLevel::Full));
         let audio = AudioSettings { master: 0.5, music: 0.5, ..default() };
@@ -424,6 +472,8 @@ mod tests {
         assert!(bad.contains("1920x1080"), "{bad}");
         let bad = GraphicsSettings { shadow_lights: 65, ..default() }.check().unwrap_err();
         assert!(bad.contains("graphics.shadow_lights 65") && bad.contains("0 to 64"), "{bad}");
+        let bad = GraphicsSettings { shadow_views: 385, ..default() }.check().unwrap_err();
+        assert!(bad.contains("graphics.shadow_views 385") && bad.contains("to 384"), "{bad}");
         let mut controls = ControlSettings::default();
         controls.hold_or_toggle.insert("gameplay.sprint".into(), "tap".into());
         assert!(controls.check().unwrap_err().contains("press, hold, toggle"));

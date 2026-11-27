@@ -317,3 +317,125 @@ fn a_mouse_move_turns_the_look_and_the_picture_in_its_frame_and_the_body_on_the_
     }
     eprintln!("{table}");
 }
+
+/// The camera content's SSAO drawn for real, through the first-person camera and its view model's camera: the picture
+/// darkens where things meet, a prepass another module takes away comes back without a lost frame, and taking SSAO
+/// out gives the cameras their MSAA back. Every capture must arrive: a camera whose prepasses, MSAA and SSAO disagree
+/// is an error Bevy logs and draws nothing for, or a wgpu validation error that stops the drawing.
+#[test]
+#[ignore = "needs a GPU, or a software one (WGPU_FORCE_FALLBACK_ADAPTER=1): cargo test -p sandbox --test sandbox -- --ignored first_person"]
+fn ssao_from_the_camera_content_draws_through_the_first_person_cameras_and_goes_again() {
+    use shards::bevy::core_pipeline::prepass::{DepthPrepass, NormalPrepass};
+    use shards::bevy::pbr::ScreenSpaceAmbientOcclusion;
+    use shards::bevy::render::view::Msaa;
+    use shards::motion::camera::SsaoTuning;
+
+    use crate::offscreen::{block, capture, mean_difference};
+
+    // A picture once the pipelines are compiled (a `shot` waits for them): a change of the camera's passes compiles new
+    // ones, and a frame drawn meanwhile leaves out what waits for them (a capture alike twice can still be one of those).
+    let drawn = |app: &mut App, picture: &Handle<Image>| {
+        shot_to(app, "ssao");
+        capture_stable(app, picture)
+    };
+
+    let mut app = offscreen_app();
+    let picture = app.world().resource::<Offscreen>().image.clone();
+    step(&mut app, 30);
+    look_down_through_the_eye(&mut app);
+    settle(&mut app, 200);
+    let plain = drawn(&mut app, &picture);
+    let world = app.world_mut();
+    let camera = world.query_filtered::<Entity, (With<FirstPersonCamera>, With<Camera3d>)>().single(world).unwrap();
+    let view_model = world.query_filtered::<Entity, With<shards::action::render::ViewModelCamera>>().single(world).unwrap();
+    let msaa = |app: &App, e: Entity| app.world().get::<Msaa>(e).copied();
+    let own = msaa(&app, camera);
+
+    app.world_mut().resource_mut::<CameraTuning>().picture.ssao = Some(SsaoTuning::default());
+    settle(&mut app, 30);
+    let occluded = drawn(&mut app, &picture);
+    let world = app.world();
+    assert!(world.get::<ScreenSpaceAmbientOcclusion>(camera).is_some() && world.get::<NormalPrepass>(camera).is_some());
+    assert_eq!((msaa(&app, camera), msaa(&app, view_model)), (Some(Msaa::Off), Some(Msaa::Off)), "both cameras without MSAA");
+    assert!(world.get::<ScreenSpaceAmbientOcclusion>(view_model).is_none(), "the arms have no SSAO of their own");
+    let luma = |[r, g, b]: [f64; 3]| 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    let (w, h) = (plain.width(), plain.height());
+    let (before, after) = (luma(block(&plain, 0, 0, w, h)), luma(block(&occluded, 0, 0, w, h)));
+    let differ = mean_difference(&plain, &occluded);
+    eprintln!("SSAO in the sandbox's first person: luma {before:.2} -> {after:.2}, mean difference {differ:.3}");
+    assert!(differ > 0.05 && after < before, "SSAO darkens the picture: luma {before:.2} -> {after:.2}, difference {differ:.3}");
+
+    // A module takes the depth prepass away (the decals do when they end): it is back the next frame, and the frames go on.
+    app.world_mut().entity_mut(camera).remove::<DepthPrepass>();
+    for _ in 0..5 {
+        capture(&mut app, picture.clone());
+    }
+    assert!(app.world().get::<DepthPrepass>(camera).is_some(), "the prepass SSAO needs is put back");
+    let again = drawn(&mut app, &picture);
+    assert!(mean_difference(&occluded, &again) < 1.0, "and the picture is the occluded one: {:.3}", mean_difference(&occluded, &again));
+
+    // Out again: the cameras' own MSAA, no SSAO, the plain picture.
+    app.world_mut().resource_mut::<CameraTuning>().picture.ssao = None;
+    settle(&mut app, 30);
+    let back = drawn(&mut app, &picture);
+    assert!(app.world().get::<ScreenSpaceAmbientOcclusion>(camera).is_none());
+    assert_eq!((msaa(&app, camera), msaa(&app, view_model)), (own, own), "the MSAA the camera had, on both");
+    assert!(mean_difference(&plain, &back) < 1.0, "the plain picture again: {:.3}", mean_difference(&plain, &back));
+}
+
+/// How much of a grade Bevy draws: a camera in HDR is graded in the tone mapping pass, all of the grade; a camera that is
+/// not is graded in each material's shader, where Bevy applies the exposure alone. So a white balance draws nothing until
+/// a bloom puts the cameras in HDR, and an exposure draws the same either way; the `lights` query says which it is. (A
+/// game tuned its grades without HDR, at a white balance far too strong, and its picture went black and red when it
+/// turned a bloom on.) If Bevy starts to grade in full without HDR this fails, and the grading docs and the query's
+/// `drawn:` line want changing.
+#[test]
+#[ignore = "needs a GPU, or a software one (WGPU_FORCE_FALLBACK_ADAPTER=1): cargo test -p sandbox --test sandbox -- --ignored first_person"]
+fn a_grade_draws_its_exposure_alone_without_hdr_and_all_of_it_in_hdr() {
+    use shards::motion::camera::{BloomComposite, BloomTuning, Grading};
+
+    use crate::offscreen::block;
+
+    let mut app = offscreen_app();
+    let picture = app.world().resource::<Offscreen>().image.clone();
+    step(&mut app, 30);
+    look_down_through_the_eye(&mut app);
+    settle(&mut app, 200);
+    // The mean colour of the world above the arms, with this bloom and this grade (a `shot` first: it waits for the
+    // pipelines that a change to HDR compiles).
+    let world_with = |app: &mut App, name: &str, bloom: &Option<BloomTuning>, grade: Option<&Grading>| {
+        let mut tuning = app.world_mut().resource_mut::<CameraTuning>();
+        (tuning.picture.bloom, tuning.picture.grading) = (bloom.clone(), grade.cloned());
+        settle(app, 30);
+        shot_to(app, name);
+        let image = capture_stable(app, &picture);
+        block(&image, 0, 200, image.width(), 250)
+    };
+    let drawn = |app: &mut App| {
+        let said = ok(app, "lights", json!({})).result;
+        said.as_str().unwrap().lines().find(|l| l.starts_with("  drawn:")).map(str::to_owned)
+    };
+    let bloom = Some(BloomTuning { intensity: 0.1, threshold: 1.0, composite: BloomComposite::Additive, ..default() });
+    let warm = Grading { temperature: 0.05, ..default() };
+    let brighter = Grading { exposure: 1.7, ..default() };
+
+    let plain = world_with(&mut app, "grade-plain", &None, None);
+    let warm_ldr = world_with(&mut app, "grade-warm", &None, Some(&warm));
+    let said_ldr = drawn(&mut app);
+    let brighter_ldr = world_with(&mut app, "grade-brighter", &None, Some(&brighter));
+    let plain_hdr = world_with(&mut app, "grade-plain-hdr", &bloom, None);
+    let warm_hdr = world_with(&mut app, "grade-warm-hdr", &bloom, Some(&warm));
+    let said_hdr = drawn(&mut app);
+    let brighter_hdr = world_with(&mut app, "grade-brighter-hdr", &bloom, Some(&brighter));
+    eprintln!(
+        "the world's mean colour: plain {plain:.1?}, warm {warm_ldr:.1?}, brighter {brighter_ldr:.1?}; in HDR plain {plain_hdr:.1?}, warm {warm_hdr:.1?}, brighter {brighter_hdr:.1?}"
+    );
+    let alike = |a: [f64; 3], b: [f64; 3]| (0..3).all(|c| (a[c] - b[c]).abs() < 1.5);
+    assert!(alike(plain, warm_ldr), "without HDR a white balance draws nothing: {plain:.1?} and {warm_ldr:.1?}");
+    assert!(said_ldr.as_deref().is_some_and(|l| l.contains("its exposure alone") && l.contains("leaves out temperature")), "{said_ldr:?}");
+    assert!(brighter_ldr[1] > plain[1] + 20.0, "an exposure is drawn without HDR: {plain:.1?} and {brighter_ldr:.1?}");
+    assert!(alike(plain, plain_hdr), "this bloom leaves the world above the arms as it was: {plain:.1?} and {plain_hdr:.1?}");
+    assert!(warm_hdr[0] > plain_hdr[0] + 8.0 && warm_hdr[2] < plain_hdr[2] - 3.0, "in HDR it warms the picture: {plain_hdr:.1?} and {warm_hdr:.1?}");
+    assert_eq!(said_hdr.as_deref(), Some("  drawn: all of it (the camera draws in HDR)"));
+    assert!(alike(brighter_ldr, brighter_hdr), "and an exposure is drawn alike in both: {brighter_ldr:.1?} and {brighter_hdr:.1?}");
+}
