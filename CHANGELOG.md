@@ -403,6 +403,13 @@ Changes that land in the main branch after phases C–E (`0.4.0`) go here.
   and the timing `field_timing` (`#[ignore]`) in `physics/world.rs`.
 
 ### Fixed
+- The first-person arms under an HDR world camera (a `picture.bloom`): the view model's camera drew in HDR into the world
+  camera's texture after its tone mapping and grade, with neither, so a grade's exposure brightened the world and left
+  the arms that many stops darker (1.7 in a game's tunnels). It now draws without HDR whatever the world camera does, tone
+  mapped and graded (the exposure) in its materials' shaders as over a camera without HDR; over an HDR one it draws into a
+  texture of its own, cleared to nothing, laid over the world's finished picture with premultiplied alpha (Bevy's
+  `CameraOutputMode`). The arms look the same with a bloom and without; the bloom and the rest of an HDR grade are the
+  world's alone. Tested on a GPU (`first_person::the_arms_are_drawn_alike_over_a_world_camera_with_hdr_and_without`).
 - Colour grading said every field of a grade is drawn; Bevy draws only a grade's `exposure` on a camera that does not draw
   in HDR (it grades in each material's shader there), and the rest (`temperature`, `tint`, `hue_deg`, `saturation`,
   `contrast`, `lift`, `gamma`, `gain`) only in HDR, in its tone mapping pass. A grade tuned without HDR therefore changed

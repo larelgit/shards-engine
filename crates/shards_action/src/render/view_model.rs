@@ -5,8 +5,14 @@
 //!   (the shake, the bob and the lean included), one `order` above it, with the `view_model` definition's
 //!   own field of view and near plane. It draws [`VIEW_MODEL_LAYER`] alone and loads what the world camera
 //!   drew, clearing only the depth (`Camera3d`'s default), so the model is drawn over the world and never
-//!   inside a wall. It mirrors the world camera's HDR, anti-aliasing and tone mapping, so that the two
+//!   inside a wall. It mirrors the world camera's anti-aliasing, tone mapping and grade, so that the two
 //!   share one main texture. The UI goes to the camera that draws last, so the HUD is over the arms.
+//! - **Over an HDR world camera** (a bloom) it still draws without HDR, as it does over one without: its
+//!   materials tone map in their shaders and take the world camera's grade (its exposure; [`ColorGrading`]
+//!   is drawn in full only in HDR), so the arms are drawn as they were before the world went HDR. The two
+//!   formats cannot share a texture: the view model draws into its own, cleared to nothing, and that is laid
+//!   over the world's finished picture (premultiplied alpha, [`CameraOutputMode`]). An HDR view model drawn
+//!   into the world's texture would come after the world's tone mapping and grade, and be drawn with neither.
 //! - **The rig** ([`ViewModelRig`]) is a child of the camera: an [`Animated`] root that [`ShowsBody`] of
 //!   the looked-through body, so the bridge animates it from that body's actions, with a [`GltfModel`] below.
 //!   Which definition it is follows the body's moveset each frame, so a weapon switch swaps it; an edit of
@@ -15,9 +21,10 @@
 //!   prop the bridge mounts), cast no shadow and are never culled by their (possibly stale) bounds.
 
 use bevy::camera::visibility::{NoFrustumCulling, RenderLayers, VisibilitySystems};
-use bevy::camera::{Camera, Camera3d, ClearColorConfig, Hdr, PerspectiveProjection, Projection};
+use bevy::camera::{Camera, Camera3d, CameraOutputMode, ClearColorConfig, Hdr, PerspectiveProjection, Projection};
 use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
+use bevy::render::render_resource::BlendState;
 use bevy::render::view::{ColorGrading, Msaa, Tonemapping};
 use shards_content::ContentDb;
 use shards_core::LocalPlayer;
@@ -75,6 +82,15 @@ fn views_exist(first: Query<(), With<FirstPersonCamera>>, views: Query<(), With<
     !first.is_empty() || !views.is_empty()
 }
 
+/// Whether two clear colours are the same (Bevy's `ClearColorConfig` has no `PartialEq`).
+fn same_clear(a: &ClearColorConfig, b: &ClearColorConfig) -> bool {
+    match (a, b) {
+        (ClearColorConfig::Default, ClearColorConfig::Default) | (ClearColorConfig::None, ClearColorConfig::None) => true,
+        (ClearColorConfig::Custom(x), ClearColorConfig::Custom(y)) => x == y,
+        _ => false,
+    }
+}
+
 /// The view model a body shows now: its moveset's, else the camera content's default. `None`: no
 /// view model (the body has none to show, or the definition is missing).
 pub fn view_model_of<'a>(db: &'a ContentDb, tuning: &'a CameraTuning, moveset: Option<&str>) -> Option<(&'a str, &'a ViewModelDef)> {
@@ -126,11 +142,22 @@ fn sync_view_model(
         let (fov, near) = (def.fov_deg.to_radians(), def.near);
         let projection = Projection::Perspective(PerspectiveProjection { fov, near, ..default() });
         let right_projection = |p: &Projection| matches!(p, Projection::Perspective(p) if (p.fov - fov).abs() < 1e-6 && (p.near - near).abs() < 1e-9);
-        // An HDR world camera has tone mapped what it drew; the view model is drawn over that as it is.
-        let tone = if hdr { Some(Tonemapping::None) } else { tonemapping.copied() };
-        // A camera that does not draw in HDR tone maps (and grades, F13) in each material's shader, so the view model's own
-        // camera wants the world camera's grade to match; an HDR one grades the finished picture, which this camera draws over.
-        let grading = if hdr { None } else { world_grading.cloned() };
+        // The view model never draws in HDR: it tone maps (and grades, F13) in its materials' shaders, with the world
+        // camera's tone mapping and grade, so the arms are drawn alike over a world camera with HDR and without.
+        let (tone, grading) = (tonemapping.copied(), world_grading.cloned());
+        // Over a world camera without HDR it draws into the same texture, over what the world drew. Over an HDR one (whose
+        // texture is of another format) it draws into its own, cleared to nothing, and lays that over the world's picture.
+        let (clear, output) = if hdr {
+            let blend = CameraOutputMode::Write { blend_state: Some(BlendState::PREMULTIPLIED_ALPHA_BLENDING), clear_color: ClearColorConfig::None };
+            (ClearColorConfig::Custom(Color::NONE), blend)
+        } else {
+            (ClearColorConfig::None, CameraOutputMode::default())
+        };
+        let same_output = |a: &CameraOutputMode| match (a, &output) {
+            (CameraOutputMode::Write { blend_state: x, clear_color: c }, CameraOutputMode::Write { blend_state: y, clear_color: d }) => x == y && same_clear(c, d),
+            (CameraOutputMode::Skip, CameraOutputMode::Skip) => true,
+            _ => false,
+        };
         let camera = match existing {
             Some((camera, _, mut cam, mut proj, has_hdr, has_msaa, has_tone, has_grading)) => {
                 let active = world_camera.is_active && !in_shot;
@@ -138,16 +165,16 @@ fn sync_view_model(
                     cam.order = world_camera.order + 1;
                     cam.is_active = active;
                 }
+                if !same_clear(&cam.clear_color, &clear) || !same_output(&cam.output_mode) {
+                    cam.clear_color = clear;
+                    cam.output_mode = output;
+                }
                 if !right_projection(&proj) {
                     *proj = projection;
                 }
                 let mut e = commands.entity(camera);
-                if has_hdr != hdr {
-                    if hdr {
-                        e.insert(Hdr);
-                    } else {
-                        e.remove::<Hdr>();
-                    }
+                if has_hdr {
+                    e.remove::<Hdr>();
                 }
                 if has_msaa.copied() != msaa.copied()
                     && let Some(msaa) = msaa
@@ -172,15 +199,12 @@ fn sync_view_model(
                     Name::new("view model camera"),
                     ViewModelCamera,
                     Camera3d::default(),
-                    Camera { order: world_camera.order + 1, is_active: world_camera.is_active && !in_shot, clear_color: ClearColorConfig::None, ..default() },
+                    Camera { order: world_camera.order + 1, is_active: world_camera.is_active && !in_shot, clear_color: clear, output_mode: output, ..default() },
                     projection,
                     RenderLayers::layer(VIEW_MODEL_LAYER),
                     Transform::IDENTITY,
                     ChildOf(world),
                 ));
-                if hdr {
-                    e.insert(Hdr);
-                }
                 if let Some(msaa) = msaa {
                     e.insert(*msaa);
                 }

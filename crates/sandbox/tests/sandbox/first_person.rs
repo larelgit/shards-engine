@@ -439,3 +439,44 @@ fn a_grade_draws_its_exposure_alone_without_hdr_and_all_of_it_in_hdr() {
     assert_eq!(said_hdr.as_deref(), Some("  drawn: all of it (the camera draws in HDR)"));
     assert!(alike(brighter_ldr, brighter_hdr), "and an exposure is drawn alike in both: {brighter_ldr:.1?} and {brighter_hdr:.1?}");
 }
+
+/// The arms are drawn alike over a world camera with HDR (a bloom) and without: the view model's camera draws without
+/// HDR either way, tone mapped and graded (its exposure) in its shaders, into a texture of its own laid over the world's
+/// picture. (Until it did, an HDR world camera drew the arms after its tone mapping and grade, with neither: a grade's
+/// exposure of 1.7 stops brightened the world and left the arms 1.7 stops darker.)
+#[test]
+#[ignore = "needs a GPU, or a software one (WGPU_FORCE_FALLBACK_ADAPTER=1): cargo test -p sandbox --test sandbox -- --ignored first_person"]
+fn the_arms_are_drawn_alike_over_a_world_camera_with_hdr_and_without() {
+    use shards::motion::camera::{BloomComposite, BloomTuning, Grading};
+
+    use crate::offscreen::block;
+
+    let mut app = offscreen_app();
+    let picture = app.world().resource::<Offscreen>().image.clone();
+    step(&mut app, 30);
+    look_down_through_the_eye(&mut app);
+    settle(&mut app, 200);
+    let brighter = Grading { exposure: 1.7, ..default() };
+    let bloom = Some(BloomTuning { intensity: 0.1, threshold: 1.0, composite: BloomComposite::Additive, ..default() });
+    // The picture with this bloom and this grade, and with the view model or without.
+    let take = |app: &mut App, name: &str, bloom: &Option<BloomTuning>, arms: bool| {
+        let mut tuning = app.world_mut().resource_mut::<CameraTuning>();
+        (tuning.picture.bloom, tuning.picture.grading) = (bloom.clone(), Some(brighter.clone()));
+        tuning.first_person.view_model = arms.then(|| "arms".into());
+        settle(app, 30);
+        shot_to(app, name);
+        capture_stable(app, &picture)
+    };
+    let ldr = take(&mut app, "arms-ldr", &None, true);
+    let hdr = take(&mut app, "arms-hdr", &bloom, true);
+    let hdr_bare = take(&mut app, "arms-hdr-no-view-model", &bloom, false);
+    let (arms_ldr, arms_hdr) = (block(&ldr, 230, 440, 870, 280), block(&hdr, 230, 440, 870, 280));
+    let (world_ldr, world_hdr) = (block(&ldr, 300, 200, 980, 200), block(&hdr, 300, 200, 980, 200));
+    eprintln!("the arms' mean colour: {arms_ldr:.1?} without HDR, {arms_hdr:.1?} in HDR; the world above them {world_ldr:.1?} and {world_hdr:.1?}");
+    let alike = |a: [f64; 3], b: [f64; 3], by: f64| (0..3).all(|c| (a[c] - b[c]).abs() < by);
+    assert!(alike(arms_ldr, arms_hdr, 3.0), "the arms are drawn alike: {arms_ldr:.1?} and {arms_hdr:.1?}");
+    assert!(alike(world_ldr, world_hdr, 1.5), "and the world above them: {world_ldr:.1?} and {world_hdr:.1?}");
+    let arms = changed(&hdr, &hdr_bare, (230, 440, 870, 280));
+    let world = changed(&hdr, &hdr_bare, (300, 200, 980, 200));
+    assert!(arms > 5000 && world < 50, "in HDR the arms are laid over the world, which shows round them: {arms} pixels differ below, {world} above");
+}

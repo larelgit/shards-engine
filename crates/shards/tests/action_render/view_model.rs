@@ -240,11 +240,31 @@ fn a_world_camera_that_grades_in_its_shaders_hands_its_grade_to_the_view_model_c
     app.update();
     assert_eq!(grade_of(&app, vm), ColorGrading::default(), "and ungraded when the world is");
 
-    // An HDR camera grades the finished picture, which the second camera draws over (with no tone mapping of its own, so no grade).
-    app.world_mut().entity_mut(camera).insert((Hdr, grade));
+    // Over an HDR camera the second one still draws without HDR, graded and tone mapped in its shaders as before, into a
+    // texture of its own (cleared to nothing) that is laid over the world's finished picture.
+    use shards::bevy::camera::{CameraOutputMode, ClearColorConfig};
+    use shards::bevy::render::view::Tonemapping;
+    app.world_mut().entity_mut(camera).insert((Hdr, grade.clone(), Tonemapping::TonyMcMapface));
     app.update();
     app.update();
-    assert_eq!(grade_of(&app, vm), ColorGrading::default(), "under HDR the view model is drawn over the graded picture, ungraded");
+    assert_eq!(grade_of(&app, vm), grade, "under HDR the view model is graded like the world still");
+    let world = app.world();
+    assert!(world.get::<Hdr>(vm).is_none(), "and draws without HDR");
+    assert_eq!(world.get::<Tonemapping>(vm), Some(&Tonemapping::TonyMcMapface), "tone mapped as the world is, in its shaders");
+    let cam = world.get::<Camera>(vm).unwrap();
+    assert!(matches!(cam.clear_color, ClearColorConfig::Custom(c) if c == Color::NONE), "its own texture starts empty: {:?}", cam.clear_color);
+    assert!(
+        matches!(cam.output_mode, CameraOutputMode::Write { blend_state: Some(_), clear_color: ClearColorConfig::None }),
+        "and is laid over the world's picture: {:?}",
+        cam.output_mode
+    );
+
+    // Without HDR again: the shared texture, loaded as the world drew it.
+    app.world_mut().entity_mut(camera).remove::<Hdr>();
+    app.update();
+    app.update();
+    let cam = app.world().get::<Camera>(vm).unwrap();
+    assert!(matches!(cam.clear_color, ClearColorConfig::None) && matches!(cam.output_mode, CameraOutputMode::Write { blend_state: None, .. }));
 }
 
 #[test]
