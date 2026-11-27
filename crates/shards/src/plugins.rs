@@ -273,7 +273,8 @@ fn with_window(group: PluginGroupBuilder, config: &EngineConfig) -> PluginGroupB
     // The least latency a hand on the mouse can feel, at some of the frame rate: one frame queued on the GPU, not
     // Bevy's two, and no pipelined rendering (with it the main world works on the next frame while this one is drawn,
     // which is one frame more between a mouse move and the picture). With vsync and both, a look turned 3 to 4 frames
-    // after the hand moved, which a player felt as smoothing on the mouse.
+    // after the hand moved, which a player felt as smoothing on the mouse. A game that needs the frame rate more than
+    // that frame asks for the render thread back (`EngineConfig::pipelined_rendering`): the one queued frame stays.
     let window = Window {
         title: config.title.clone(),
         resolution: (width, height).into(),
@@ -283,7 +284,7 @@ fn with_window(group: PluginGroupBuilder, config: &EngineConfig) -> PluginGroupB
     #[cfg_attr(not(feature = "render"), allow(unused_mut))]
     let mut group = group.set(WindowPlugin { primary_window: Some(window), ..default() });
     #[cfg(feature = "render")]
-    if group.contains::<bevy::render::pipelined_rendering::PipelinedRenderingPlugin>() {
+    if !config.pipelined_rendering && group.contains::<bevy::render::pipelined_rendering::PipelinedRenderingPlugin>() {
         group = group.disable::<bevy::render::pipelined_rendering::PipelinedRenderingPlugin>();
     }
     // `<assets>/icon.png`, if the game has one, in the title bar and the taskbar; how long frames take.

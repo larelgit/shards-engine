@@ -66,6 +66,9 @@ git push origin v0.1.0
 Changes that land in the main branch after phases C–E (`0.4.0`) go here.
 
 ### Added
+- `EngineConfig::pipelined_rendering` (default `false`): a window keeps Bevy's render thread, so a frame costs the
+  slower of update and render instead of their sum, at one more frame between the mouse and the picture. For a game
+  whose render thread is its limit (one measured 14 ms a frame in a window where the two side by side are 9).
 - An anti-aliasing pass in the camera's picture (the manual's "The picture"): `picture.anti_aliasing: Some(Fxaa)` or
   `Some(Smaa)` in the `camera` content puts Bevy's `Fxaa` (its defaults) or `Smaa` (`High`) on the world cameras, for a
   camera SSAO took MSAA from; taking it out gives the camera back its own. `AntiAliasing`. Off by default. The view
